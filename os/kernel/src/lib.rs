@@ -74,6 +74,7 @@ pub mod process;
 pub mod storage;
 pub mod syscall;
 pub mod sync;
+pub mod serialtest;
 
 pub mod built_info {
     // The file has been placed there by the build script

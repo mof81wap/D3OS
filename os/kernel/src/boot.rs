@@ -54,6 +54,7 @@ use x86_64::structures::gdt::Descriptor;
 use x86_64::structures::paging::frame::PhysFrameRange;
 use x86_64::structures::paging::{PageTable, PageTableFlags, PhysFrame};
 use x86_64::{PhysAddr, VirtAddr};
+use crate::serialtest::testserial::{test_com2, test_serial_loop, test_non_write_only, test_read};
 
 // import labels from linker script 'link.ld'
 unsafe extern "C" {
@@ -165,6 +166,10 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     if let Some(serial) = serial_port() {
         logger().register(serial);
     }
+
+    test_com2();
+    test_serial_loop();
+    test_non_write_only();
 
     // Map the framebuffer, needed for text output of the terminal
     let fb_info = multiboot
@@ -349,6 +354,8 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
         }
     }
     scheduler().ready(Thread::new_kernel_thread(cleanup, "cleanup"));
+
+    scheduler().ready(Thread::new_kernel_thread(test_read, "test_read"));
 
     //Initialize tty buffer (Workaround for missing pipes)
     init_tty();

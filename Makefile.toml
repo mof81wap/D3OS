@@ -37,6 +37,7 @@ args = [
     "-vga", "none",
     "-rtc", "base=localtime",
     "-serial", "stdio",
+    "-serial", "telnet:localhost:4321,server,nowait",
     #"-trace", "virtio_gpu_*",
     #"-trace", "virtio_gpu_virgl_process_cmd",
 
