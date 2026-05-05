@@ -147,8 +147,49 @@ bitflags! {
 }
 
 bitflags! {
-    struct InterruptStatus: u8 {
-        const InterruptPending = 0x01;
+    struct InterruptEnable: u8 {
+        const DISABLE = 0x00;
+        const RECEIVE_AVAILABLE = 1 << 0;
+        const TRANSMIT_EMPTY = 1 << 1;
+        const LINE_STATUS = 1 << 2;
+        const MODEM_STATUS = 1 << 3;
+    }
+}
+
+bitflags! {
+    struct InterruptIdentification: u8 {
+        const INTERRUPT_PENDING = 1 << 0;
+        const MODEM_STATUS = 0b00 << 1;
+        const TRANSMIT_EMPTY = 0b01 << 1;
+        const RECEIVE_AVAILABLE = 0b10 << 1;
+        const LINE_STATUS = 0b11 << 1;
+        const TIMEOUT_PENDING = 1 << 3;
+        const NO_FIFO = 0b00 << 6;
+        const FIFO_UNUSABLE = 0b01 << 6;
+        const FIFO_ENABLED = 0b10 << 6;
+    }
+}
+
+bitflags! {
+    struct FifoControl: u8 {
+        const FIFO_ENABLE = 1 << 0;
+        const CLEAR_RECEIVE = 1 << 1;
+        const CLEAR_TRANSMIT = 1 << 2;
+        const DMA_MODE = 1 << 3;
+        const BYTES_1 = 0b00 << 6;
+        const BYTES_4 = 0b01 << 6;
+        const BYTES_8 = 0b10 << 6;
+        const BYTES_14 = 0b11 << 6;
+    }
+}
+
+bitflags! {
+    struct ModemControl: u8 {
+        const DTR = 1 << 0;
+        const RTS = 1 << 1;
+        const OUT1 = 1 << 2;
+        const OUT2 = 1 << 3;
+        const LOOP = 1 << 4;
     }
 }
 
@@ -163,9 +204,11 @@ struct Transceiver {
     port: ComPort,
     receive_buffer: Mutex<PortReadOnly<u8>>,
     transmit_buffer: Mutex<PortWriteOnly<u8>>,
-    interrupt_control: Mutex<Port<u8>>,
+    interrupt_enable: Mutex<Port<u8>>,
     line_control: Mutex<Port<u8>>,
     line_status: PortReadOnly<u8>,
+    fifo_control: Mutex<PortWriteOnly<u8>>,
+    modem_control: Mutex<Port<u8>>,
 }
 
 impl Transceiver {
@@ -175,38 +218,40 @@ impl Transceiver {
             port,
             receive_buffer: Mutex::new(PortReadOnly::new(base)),
             transmit_buffer: Mutex::new(PortWriteOnly::new(base)),
-            interrupt_control: Mutex::new(Port::new(base + 1)),
+            interrupt_enable: Mutex::new(Port::new(base + 1)),
             line_control: Mutex::new(Port::new(base + 3)),
             line_status: PortReadOnly::new(base + 5),
+            fifo_control: Mutex::new(PortWriteOnly::new(base + 2)),
+            modem_control: Mutex::new(Port::new(base + 4)),
         }
     }
 
     fn speed(&self, speed: BaudRate) {
-        let mut interrupt_control = self.interrupt_control.lock();
+        let mut interrupt_enable = self.interrupt_enable.lock();
         let mut line_control = self.line_control.lock();
         let mut data = self.transmit_buffer.lock();
 
         info!("Setting baud rate of {:?} to {:?}", self.port, speed);
 
         unsafe  {
-            let interrupt_backup = interrupt_control.read(); // Backup interrupt register
+            let interrupt_backup = interrupt_enable.read(); // Backup interrupt register
             let line_control_backup = line_control.read(); // Backup line control register
 
-            interrupt_control.write(0x00); // Disable all interrupts
+            interrupt_enable.write(0x00); // Disable all interrupts
             // Enable DLAB, so that the divisor can be set
             line_control.write(LineControl::DIVISOR_LATCH_ACCESS.bits());
 
             data.write((speed as u16 & 0x00ff) as u8); // Divisor low byte
-            interrupt_control.write(((speed as u16 & 0xff00) >> 8) as u8); // Divisor high byte
+            interrupt_enable.write(((speed as u16 & 0xff00) >> 8) as u8); // Divisor high byte
 
             line_control.write(line_control_backup); // Restore line control register
-            interrupt_control.write(interrupt_backup); // Restore interrupt register
+            interrupt_enable.write(interrupt_backup); // Restore interrupt register
         }
     }
 
-    fn interrupts(&self, enabled: bool) {
-        let mut interrupt_control = self.interrupt_control.lock();
-        unsafe { interrupt_control.write(if enabled { 0x01 } else { 0x00 }) };
+    fn interrupts(&self, value: InterruptEnable) {
+        let mut interrupt_enable = self.interrupt_enable.lock();
+        unsafe { interrupt_enable.write(value.bits()) };
     }
 
     fn line_control(&self, value: LineControl) {
@@ -220,6 +265,16 @@ impl Transceiver {
             let reg = ptr::from_ref(&self.line_status).cast_mut().as_mut().unwrap();
             LineStatus::from_bits_truncate(reg.read())
         }
+    }
+
+    fn fifo_control(&self, value: FifoControl) {
+        let mut fifo_control = self.fifo_control.lock();
+        unsafe { fifo_control.write(value.bits()) };
+    }
+
+    fn modem_control(&self, value: ModemControl) {
+        let mut modem_control = self.modem_control.lock();
+        unsafe { modem_control.write(value.bits()) };
     }
 
     fn readable(&self) -> bool {
@@ -272,7 +327,7 @@ pub fn check_port(port: ComPort) -> bool {
 
 impl OutputStream for SerialPort {
     fn write_byte(&self, b: u8) {
-        self.write_str(&String::from(char::from(b)));
+        self.transceiver.write(b);
     }
 
     fn write_str(&self, string: &str) {
@@ -315,8 +370,8 @@ impl InterruptHandler for SerialInterruptHandler {
             panic!("Serial: Required register is locked during interrupt!");
         }
 
-        let interrupt_status = InterruptStatus::from_bits_truncate(unsafe { self.serial_port.interrupt_status.lock().read() });
-        if !interrupt_status.contains(InterruptStatus::InterruptPending) {
+        let interrupt_status = InterruptIdentification::from_bits_truncate(unsafe { self.serial_port.interrupt_status.lock().read() });
+        if interrupt_status.contains(InterruptIdentification::INTERRUPT_PENDING) {
             return;
         }
 
@@ -336,11 +391,20 @@ impl InterruptHandler for SerialInterruptHandler {
 impl SerialPort {
     pub fn new(port: ComPort, speed: BaudRate, buffer_cap: usize) -> Self {
         let transceiver = Transceiver::new(port);
-        transceiver.interrupts(false);
+        transceiver.interrupts(InterruptEnable::DISABLE);
         transceiver.speed(speed);
         // the default: 8 bits, no parity, one stop bit
         transceiver.line_control(LineControl::DATA);
         // TODO: set FIFO and modem control
+        transceiver.fifo_control(
+            FifoControl::FIFO_ENABLE
+            | FifoControl::CLEAR_RECEIVE
+            | FifoControl::CLEAR_TRANSMIT
+            | FifoControl::BYTES_1
+        );
+        transceiver.modem_control(
+            ModemControl::DTR | ModemControl::RTS | ModemControl::OUT2
+        );
 
         Self {
             port,
@@ -352,7 +416,7 @@ impl SerialPort {
 
     pub fn new_write_only(port: ComPort) -> Self {
         let transceiver = Transceiver::new(port);
-        transceiver.interrupts(false);
+        transceiver.interrupts(InterruptEnable::DISABLE);
         transceiver.speed(BaudRate::Baud115200);
         // the default: 8 bits, no parity, one stop bit
         transceiver.line_control(LineControl::DATA);
@@ -372,8 +436,15 @@ impl SerialPort {
             Com2 | Com4 => InterruptVector::Com2,
         };
 
-        serial_port.transceiver.interrupts(true);
-        interrupt_dispatcher().assign(vector, Box::new(SerialInterruptHandler::new(serial_port)));
+        interrupt_dispatcher().assign(vector, Box::new(SerialInterruptHandler::new(serial_port.clone())));
         apic().allow(vector);
+
+        serial_port.transceiver.interrupts(
+            InterruptEnable::RECEIVE_AVAILABLE | InterruptEnable::LINE_STATUS
+        );
+    }
+
+    pub fn try_read_polled(&self) -> Option<u8> {
+        self.transceiver.read()
     }
 }
