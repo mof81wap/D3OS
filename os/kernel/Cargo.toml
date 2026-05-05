@@ -57,6 +57,7 @@ num_enum = { version = "0.7.3", default-features = false }
 llfree = { git = "https://github.com/luhsra/llfree-rs", default-features = false }
 uuid = { version = "1.23.1", default-features = false, features = ["v7"] }
 gdbstub = { version = "0.7.10", default-features = false }
+gdbstub_arch = "0.3.3"
 
 [build-dependencies]
 built = { version = "0.7.7", features = ["chrono", "git2"] }
