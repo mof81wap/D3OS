@@ -63,6 +63,7 @@ pub extern "sysv64" fn test_read() {
     let port = Arc::new(serial);
     SerialPort::plugin(port.clone());
     port.write_str("READY\r\n");
+    port.print_lsr();
     
     loop {
         if let Some(b) = port.decoded_try_read_byte() {

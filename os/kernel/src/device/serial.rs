@@ -447,4 +447,20 @@ impl SerialPort {
     pub fn try_read_polled(&self) -> Option<u8> {
         self.transceiver.read()
     }
+
+    fn hex(n: u8) -> u8 {
+        match n {
+            0..=9 => b'0' + n,
+            10..=15 => b'a' + (n - 10),
+            _ => b'?',
+        }
+    }
+
+    pub fn print_lsr(&self) {
+        let lsr = self.transceiver.line_status().bits();
+        self.write_str("LSR=");
+        self.write_byte(Self::hex((lsr >> 4) &0x0f));
+        self.write_byte(Self::hex(lsr & 0x0f));
+        self.write_str("\r\n");
+    }
 }
