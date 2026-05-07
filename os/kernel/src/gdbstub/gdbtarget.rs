@@ -2,17 +2,12 @@ use gdbstub::target::{Target, TargetResult};
 use gdbstub_arch::x86::X86_64_SSE;
 use gdbstub_arch::x86::reg::X86_64CoreRegs;
 use gdbstub::target::ext::base::BaseOps;
-use gdbstub::target::ext::base::singlethread::{SingleThreadBase, SingleThreadResume, SingleThreadSingleStep};
-use gdbstub::target::ext::base::singlethread::{SingleThreadResumeOps, SingleThreadSingleStepOps};
+use gdbstub::target::ext::base::multithread::{MultiThreadBase, MultiThreadResume, MultiThreadSingleStep};
+use gdbstub::target::ext::base::multithread::{MultiThreadResumeOps, MultiThreadSingleStepOps};
 use crate::{scheduler};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ThreadId(usize);
 
-struct GdbStubTarget {
-    selected_thread: ThreadId,
-    stopped_thread: ThreadId,
-}
+struct GdbStubTarget;
 
 impl Target for GdbStubTarget {
     type Error = ();
@@ -20,27 +15,35 @@ impl Target for GdbStubTarget {
 
     #[inline(always)]
     fn base_ops(&mut self) -> BaseOps<Self::Arch, Self::Error> {
-        BaseOps::SingleThread(self)
+        BaseOps::MultiThread(self)
     }
 }
 
-impl SingleThreadBase for GdbStubTarget {
-    fn read_registers(&mut self, regs: &mut X86_64CoreRegs) -> TargetResult<(), Self> { todo!() }
-
-    fn write_registers(&mut self, regs: &X86_64CoreRegs) -> TargetResult<(), Self> { todo!() }
-
-    fn read_addrs(&mut self, start_addr: u64, data: &mut [u8]) -> TargetResult<(), Self> { todo!() }
-
-    fn write_addrs(&mut self, start_addr: u64, data: &[u8]) -> TargetResult<(), Self> { todo!() }
-}
-
-impl GdbStubTarget {
-    fn new() -> Self {
-        let (_current_pid, current_tid) = scheduler().current_ids();
-
-        Self {
-            selected_thread: current_tid,
-            stopped_thread: current_tid,
-        }
-    }
+impl MultiThreadBase for GdbStubTarget {
+    fn read_registers(
+        &mut self,
+        regs: &mut <Self::Arch as Arch>::Registers,
+        tid: Tid
+    ) -> TargetResult<(), Self>;
+    fn write_registers(
+        &mut self,
+        regs: &<Self::Arch as Arch>::Registers,
+        tid: Tid,
+    ) -> TargetResult<(), Self>;
+    fn read_addrs(
+        &mut self,
+        start_addr: <Self::Arch as Arch>::Usize,
+        data: &mut [u8],
+        tid: Tid
+    ) -> TargetResult<usize, Self>;
+    fn write_addrs(
+        &mut self,
+        start_addr: <Self::Arch as Arch>::Usize,
+        data: &[u8],
+        tid: Tid
+    ) -> TargetResult<(), Self>;
+    fn list_active_threads(
+        &mut self,
+        thread_is_active: &mut dyn FnMut(Tid)
+    ) -> Result<(), Self::Error>;
 }
