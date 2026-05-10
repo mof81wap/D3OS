@@ -550,6 +550,10 @@ impl Thread {
         // no wake pending -> block is allowed
         true
     }
+
+    pub fn saved_rsp0(&self) -> VirtAddr {
+        self.stacks.lock().old_rsp0
+    }
 }
 
 /// Low-level function for starting a thread in kernel mode
