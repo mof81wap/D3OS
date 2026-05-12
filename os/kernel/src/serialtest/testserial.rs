@@ -88,8 +88,6 @@ pub extern "sysv64" fn debug_thread_context() {
     
     let rsp = thread.saved_rsp0();
 
-    info!("saved rsp={:#x}", rsp.as_u64());
-
     let ctx = match thread_context_from_rsp(rsp) {
         Some(ctx) => ctx,
         None => {
@@ -98,20 +96,22 @@ pub extern "sysv64" fn debug_thread_context() {
         }
     };
 
-    info!("rax={:#x}", ctx.rax);
-    info!("rbx={:#x}", ctx.rbx);
-    info!("rcx={:#x}", ctx.rcx);
-    info!("rdx={:#x}", ctx.rdx);
-    info!("rsi={:#x}", ctx.rsi);
-    info!("rdi={:#x}", ctx.rdi);
-    info!("rbp={:#x}", ctx.rbp);
-    info!("r8={:#x}", ctx.r8);
-    info!("r9={:#x}", ctx.r9);
-    info!("r10={:#x}", ctx.r10);
-    info!("r11={:#x}", ctx.r11);
-    info!("r12={:#x}", ctx.r12);
-    info!("r13={:#x}", ctx.r13);
-    info!("r14={:#x}", ctx.r14);
-    info!("r15={:#x}", ctx.r15);
-    info!("rflags={:#x}", ctx.rflags);
+    info!("saved rsp={:#x}", ctx.rsp);
+
+    info!("rax={:#x}", ctx.registers.rax);
+    info!("rbx={:#x}", ctx.registers.rbx);
+    info!("rcx={:#x}", ctx.registers.rcx);
+    info!("rdx={:#x}", ctx.registers.rdx);
+    info!("rsi={:#x}", ctx.registers.rsi);
+    info!("rdi={:#x}", ctx.registers.rdi);
+    info!("rbp={:#x}", ctx.registers.rbp);
+    info!("r8={:#x}", ctx.registers.r8);
+    info!("r9={:#x}", ctx.registers.r9);
+    info!("r10={:#x}", ctx.registers.r10);
+    info!("r11={:#x}", ctx.registers.r11);
+    info!("r12={:#x}", ctx.registers.r12);
+    info!("r13={:#x}", ctx.registers.r13);
+    info!("r14={:#x}", ctx.registers.r14);
+    info!("r15={:#x}", ctx.registers.r15);
+    info!("rflags={:#x}", ctx.registers.rflags);
 }
