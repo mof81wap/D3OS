@@ -8,6 +8,8 @@ use crate::process::thread::Thread;
 use crate::process::scheduler::Scheduler;
 use crate::scheduler;
 use alloc::sync::Arc;
+use crate::gdbstub::gdbtarget::{thread_context_from_rsp};
+use log::info;
 
 
 pub fn test_com2() {
@@ -79,4 +81,37 @@ pub extern "sysv64" fn test_read() {
             port.write_byte(b);
         }
     }*/
+}
+
+pub extern "sysv64" fn debug_thread_context() {
+    let thread = Thread::new_kernel_thread(test_read, "a");
+    
+    let rsp = thread.saved_rsp0();
+
+    info!("saved rsp={:#x}", rsp.as_u64());
+
+    let ctx = match thread_context_from_rsp(rsp) {
+        Some(ctx) => ctx,
+        None => {
+            info!("No thread context");
+            return;
+        }
+    };
+
+    info!("rax={:#x}", ctx.rax);
+    info!("rbx={:#x}", ctx.rbx);
+    info!("rcx={:#x}", ctx.rcx);
+    info!("rdx={:#x}", ctx.rdx);
+    info!("rsi={:#x}", ctx.rsi);
+    info!("rdi={:#x}", ctx.rdi);
+    info!("rbp={:#x}", ctx.rbp);
+    info!("r8={:#x}", ctx.r8);
+    info!("r9={:#x}", ctx.r9);
+    info!("r10={:#x}", ctx.r10);
+    info!("r11={:#x}", ctx.r11);
+    info!("r12={:#x}", ctx.r12);
+    info!("r13={:#x}", ctx.r13);
+    info!("r14={:#x}", ctx.r14);
+    info!("r15={:#x}", ctx.r15);
+    info!("rflags={:#x}", ctx.rflags);
 }
