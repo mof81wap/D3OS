@@ -14,7 +14,7 @@ struct GdbStubTarget;
 
 const THREAD_REG_COUNT: usize = 19;
 
-#[repr(usize)]
+#[repr(u64)]
 #[derive(Clone, Copy, Debug)]
 pub enum ThreadRegs {
     Gsbase = 0,
@@ -41,11 +41,11 @@ pub enum ThreadRegs {
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ThreadContext {
-    pub registers: [usize; THREAD_REG_COUNT],
+    pub registers: [u64; THREAD_REG_COUNT],
     pub rsp: u64,
 }
 
-/*impl From<ThreadContext> for X86_64CoreRegs {
+impl From<ThreadContext> for X86_64CoreRegs {
     fn from(ctx: ThreadContext) -> Self {
         let mut regs = X86_64CoreRegs::default();
         regs.regs[0] = ctx.registers[ThreadRegs::Rax as usize];
@@ -56,19 +56,20 @@ pub struct ThreadContext {
         regs.regs[5] = ctx.registers[ThreadRegs::Rdi as usize];
         regs.regs[6] = ctx.registers[ThreadRegs::Rbx as usize];
         regs.regs[7] = ctx.rsp; 
-        regs.regs[8] = ctx.registers.[ThreadRegs::R8 as usize];
+        regs.regs[8] = ctx.registers[ThreadRegs::R8 as usize];
         regs.regs[9] = ctx.registers[ThreadRegs::R9 as usize];
         regs.regs[10] = ctx.registers[ThreadRegs::R10 as usize];
         regs.regs[11] = ctx.registers[ThreadRegs::R11 as usize];
         regs.regs[12] = ctx.registers[ThreadRegs::R12 as usize];
         regs.regs[13] = ctx.registers[ThreadRegs::R13 as usize];
         regs.regs[14] = ctx.registers[ThreadRegs::R14 as usize];
-        regs.regs[15] = ctx.registers.[ThreadRegs::R15 as usize];
+        regs.regs[15] = ctx.registers[ThreadRegs::R15 as usize];
+        regs.rip = ctx.registers[ThreadRegs::Rip as usize];
+        regs.eflags = ctx.registers[ThreadRegs::Rflags as usize] as u32;
 
-        regs.rip = ctx.registers[ThreadRegs::Rip];
-        regs.eflags = ctx.registers[ThreadRegs::Rflags];
+        regs
     }
-}*/
+}
 
 /*impl Target for GdbStubTarget {
     type Error = ();
@@ -130,7 +131,7 @@ pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
         return None;
     }
 
-    let registers = unsafe { (rsp.as_u64() as *const [usize; THREAD_REG_COUNT]).read() };
+    let registers = unsafe { (rsp.as_u64() as *const [u64; THREAD_REG_COUNT]).read() };
 
     Some(ThreadContext {
         registers,
