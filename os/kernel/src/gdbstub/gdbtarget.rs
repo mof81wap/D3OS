@@ -12,59 +12,61 @@ use x86_64::VirtAddr;
 
 struct GdbStubTarget;
 
-#[repr(C)]
+const THREAD_REG_COUNT: usize = 19;
+
+#[repr(usize)]
 #[derive(Clone, Copy, Debug)]
-pub struct ThreadRegs {
-    pub gsbase: u64,
-    pub fsbase: u64,
-    pub rbp: u64,
-    pub rdi: u64,
-    pub rsi: u64,
-    pub rdx: u64,
-    pub rcx: u64,
-    pub rbx: u64,
-    pub rax: u64,
-    pub r15: u64,
-    pub r14: u64,
-    pub r13: u64,
-    pub r12: u64,
-    pub r11: u64,
-    pub r10: u64,
-    pub r9: u64,
-    pub r8: u64,
-    pub rflags: u64,
-    pub rip: u64,
+pub enum ThreadRegs {
+    Gsbase = 0,
+    Fsbase = 1,
+    Rbp = 2,
+    Rdi = 3,
+    Rsi = 4,
+    Rdx = 5,
+    Rcx = 6,
+    Rbx = 7,
+    Rax = 8,
+    R15 = 9,
+    R14 = 10,
+    R13 = 11,
+    R12 = 12,
+    R11 = 13,
+    R10 = 14,
+    R9 = 15,
+    R8 = 16,
+    Rflags = 17,
+    Rip = 18,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct ThreadContext {
-    pub registers: ThreadRegs,
+    pub registers: [usize; THREAD_REG_COUNT],
     pub rsp: u64,
 }
 
 /*impl From<ThreadContext> for X86_64CoreRegs {
     fn from(ctx: ThreadContext) -> Self {
         let mut regs = X86_64CoreRegs::default();
-        regs.regs[0] = ctx.registers.rax;
-        regs.regs[1] = ctx.registers.rbx;
-        regs.regs[2] = ctx.registers.rcx;
-        regs.regs[3] = ctx.registers.rdx;
-        regs.regs[4] = ctx.registers.rsi;
-        regs.regs[5] = ctx.registers.rdi;
-        regs.regs[6] = ctx.registers.rbp;
+        regs.regs[0] = ctx.registers[ThreadRegs::Rax as usize];
+        regs.regs[1] = ctx.registers[ThreadRegs::Rbx as usize];
+        regs.regs[2] = ctx.registers[ThreadRegs::Rcx as usize];
+        regs.regs[3] = ctx.registers[ThreadRegs::Rdx as usize];
+        regs.regs[4] = ctx.registers[ThreadRegs::Rsi as usize];
+        regs.regs[5] = ctx.registers[ThreadRegs::Rdi as usize];
+        regs.regs[6] = ctx.registers[ThreadRegs::Rbx as usize];
         regs.regs[7] = ctx.rsp; 
-        regs.regs[8] = ctx.registers.r8;
-        regs.regs[9] = ctx.registers.r9;
-        regs.regs[10] = ctx.registers.r10;
-        regs.regs[11] = ctx.registers.r11;
-        regs.regs[12] = ctx.registers.r12;
-        regs.regs[13] = ctx.registers.r13;
-        regs.regs[14] = ctx.registers.r14;
-        regs.regs[15] = ctx.registers.r15;
+        regs.regs[8] = ctx.registers.[ThreadRegs::R8 as usize];
+        regs.regs[9] = ctx.registers[ThreadRegs::R9 as usize];
+        regs.regs[10] = ctx.registers[ThreadRegs::R10 as usize];
+        regs.regs[11] = ctx.registers[ThreadRegs::R11 as usize];
+        regs.regs[12] = ctx.registers[ThreadRegs::R12 as usize];
+        regs.regs[13] = ctx.registers[ThreadRegs::R13 as usize];
+        regs.regs[14] = ctx.registers[ThreadRegs::R14 as usize];
+        regs.regs[15] = ctx.registers.[ThreadRegs::R15 as usize];
 
-        regs.rip = ctx.registers.rip;
-        regs.eflags = ctx.registers.rflags;
+        regs.rip = ctx.registers[ThreadRegs::Rip];
+        regs.eflags = ctx.registers[ThreadRegs::Rflags];
     }
 }*/
 
@@ -128,7 +130,7 @@ pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
         return None;
     }
 
-    let registers = unsafe { (rsp.as_u64() as *const ThreadRegs).read() };
+    let registers = unsafe { (rsp.as_u64() as *const [usize; THREAD_REG_COUNT]).read() };
 
     Some(ThreadContext {
         registers,

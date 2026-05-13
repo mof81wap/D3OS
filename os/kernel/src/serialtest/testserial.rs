@@ -8,7 +8,7 @@ use crate::process::thread::Thread;
 use crate::process::scheduler::Scheduler;
 use crate::scheduler;
 use alloc::sync::Arc;
-use crate::gdbstub::gdbtarget::{thread_context_from_rsp};
+use crate::gdbstub::gdbtarget::{thread_context_from_rsp, ThreadRegs};
 use log::info;
 
 
@@ -98,20 +98,20 @@ pub extern "sysv64" fn debug_thread_context() {
 
     info!("saved rsp={:#x}", ctx.rsp);
 
-    info!("rax={:#x}", ctx.registers.rax);
-    info!("rbx={:#x}", ctx.registers.rbx);
-    info!("rcx={:#x}", ctx.registers.rcx);
-    info!("rdx={:#x}", ctx.registers.rdx);
-    info!("rsi={:#x}", ctx.registers.rsi);
-    info!("rdi={:#x}", ctx.registers.rdi);
-    info!("rbp={:#x}", ctx.registers.rbp);
-    info!("r8={:#x}", ctx.registers.r8);
-    info!("r9={:#x}", ctx.registers.r9);
-    info!("r10={:#x}", ctx.registers.r10);
-    info!("r11={:#x}", ctx.registers.r11);
-    info!("r12={:#x}", ctx.registers.r12);
-    info!("r13={:#x}", ctx.registers.r13);
-    info!("r14={:#x}", ctx.registers.r14);
-    info!("r15={:#x}", ctx.registers.r15);
-    info!("rflags={:#x}", ctx.registers.rflags);
+    info!("rax={:#x}", ctx.registers[ThreadRegs::Rax as usize]);
+    info!("rbx={:#x}", ctx.registers[ThreadRegs::Rbx as usize]);
+    info!("rcx={:#x}", ctx.registers[ThreadRegs::Rcx as usize]);
+    info!("rdx={:#x}", ctx.registers[ThreadRegs::Rdx as usize]);
+    info!("rsi={:#x}", ctx.registers[ThreadRegs::Rsi as usize]);
+    info!("rdi={:#x}", ctx.registers[ThreadRegs::Rdi as usize]);
+    info!("rbp={:#x}", ctx.registers[ThreadRegs::Rbp as usize]);
+    info!("r8={:#x}", ctx.registers[ThreadRegs::R8 as usize]);
+    info!("r9={:#x}", ctx.registers[ThreadRegs::R9 as usize]);
+    info!("r10={:#x}", ctx.registers[ThreadRegs::R10 as usize]);
+    info!("r11={:#x}", ctx.registers[ThreadRegs::R11 as usize]);
+    info!("r12={:#x}", ctx.registers[ThreadRegs::R12 as usize]);
+    info!("r13={:#x}", ctx.registers[ThreadRegs::R13 as usize]);
+    info!("r14={:#x}", ctx.registers[ThreadRegs::R14 as usize]);
+    info!("r15={:#x}", ctx.registers[ThreadRegs::R15 as usize]);
+    info!("rflags={:#x}", ctx.registers[ThreadRegs::Rflags as usize]);
 }
