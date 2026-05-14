@@ -108,7 +108,7 @@ impl MultiThreadBase for GdbStubTarget {
                     .ok_or(TargetError::NonFatal)?;
         
         let rsp0 = thread.saved_rsp0();
-        let ctx = mut_thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
+        let mut ctx = mut_thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
         ctx.registers[ThreadRegs::Rax as usize] = regs.regs[0];
         ctx.registers[ThreadRegs::Rbx as usize] = regs.regs[1];
         ctx.registers[ThreadRegs::Rcx as usize] = regs.regs[2];
@@ -183,6 +183,13 @@ impl MultiThreadBase for GdbStubTarget {
         &mut self,
         thread_is_active: &mut dyn FnMut(Tid)
     ) -> Result<(), Self::Error> {
+        let active_ids = scheduler().active_thread_ids();
+
+        for id in active_ids {
+            if id != 0 {
+                thread_is_active(Tid::new(id).unwrap());
+            }
+        }
         Ok(())
     }
 }
@@ -192,7 +199,7 @@ pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
         return None;
     }
 
-    let registers = unsafe { (rsp.as_u64() as *const [u64; THREAD_REG_COUNT]).read(); }
+    let registers = unsafe { (rsp.as_u64() as *const [u64; THREAD_REG_COUNT]).read() };
 
     Some(ThreadContext {
         registers,
@@ -205,10 +212,10 @@ pub fn mut_thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
         return None;
     }
 
-    let registers = unsafe { &mut (rsp.as_u64() as *mut [u64; THREAD_REG_COUNT]).read(); }
+    let registers = unsafe { &mut (rsp.as_u64() as *mut [u64; THREAD_REG_COUNT]).read() };
 
     Some(ThreadContext {
-        registers,
+        registers: *registers,
         rsp: rsp.as_u64(),
     })
 }
