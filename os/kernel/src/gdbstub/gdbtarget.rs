@@ -142,11 +142,11 @@ impl MultiThreadBase for GdbStubTarget {
 
         let process = thread.process();
 
-        for (offset, byte) in data.iter().enumerate() {
+        for (offset, byte) in data.iter_mut().enumerate() {
             let virt_addr = start_addr + offset as u64;
 
             let phys_addr = process
-                            .virtual_address_space()
+                            .virtual_address_space
                             .get_phys(virt_addr)
                             .ok_or(TargetError::NonFatal)?;
 
@@ -160,6 +160,23 @@ impl MultiThreadBase for GdbStubTarget {
         data: &[u8],
         tid: Tid
     ) -> TargetResult<(), Self> {
+        let thread = scheduler()
+                    .thread(tid.get())
+                    .ok_or(TargetError::NonFatal)?;
+
+        let process = thread.process();
+
+        for (offset, byte) in data.iter().enumerate() {
+            let virt_addr = start_addr + offset as u64;
+
+            let phys_addr = process
+                            .virtual_address_space
+                            .get_phys(virt_addr)
+                            .ok_or(TargetError::NonFatal)?;
+
+            unsafe { *(phys_addr.as_u64() as *mut u8) = *byte; }
+        }
+
         Ok(())
     }
     fn list_active_threads(
