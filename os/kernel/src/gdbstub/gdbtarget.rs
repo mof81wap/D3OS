@@ -136,7 +136,23 @@ impl MultiThreadBase for GdbStubTarget {
         data: &mut [u8],
         tid: Tid
     ) -> TargetResult<usize, Self> {
-        Ok(())
+        let thread = scheduler()
+                    .thread(tid.get())
+                    .ok_or(TargetError::NonFatal)?;
+
+        let process = thread.process();
+
+        for (offset, byte) in data.iter().enumerate() {
+            let virt_addr = start_addr + offset as u64;
+
+            let phys_addr = process
+                            .virtual_address_space()
+                            .get_phys(virt_addr)
+                            .ok_or(TargetError::NonFatal)?;
+
+            unsafe { *byte = *(phys_addr.as_u64() as *const u8); }
+        }
+        Ok(data.len())
     }
     fn write_addrs(
         &mut self,
@@ -159,7 +175,7 @@ pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
         return None;
     }
 
-    let registers = unsafe { (rsp.as_u64() as *const [u64; THREAD_REG_COUNT]).read() };
+    let registers = unsafe { (rsp.as_u64() as *const [u64; THREAD_REG_COUNT]).read(); }
 
     Some(ThreadContext {
         registers,
@@ -172,7 +188,7 @@ pub fn mut_thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
         return None;
     }
 
-    let registers = unsafe { &mut (rsp.as_u64() as *mut [u64; THREAD_REG_COUNT]).read() };
+    let registers = unsafe { &mut (rsp.as_u64() as *mut [u64; THREAD_REG_COUNT]).read(); }
 
     Some(ThreadContext {
         registers,
