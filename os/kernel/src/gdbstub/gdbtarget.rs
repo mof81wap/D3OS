@@ -71,7 +71,7 @@ impl From<ThreadContext> for X86_64CoreRegs {
     }
 }
 
-/*impl Target for GdbStubTarget {
+impl Target for GdbStubTarget {
     type Error = ();
     type Arch = X86_64_SSE;
 
@@ -82,7 +82,7 @@ impl From<ThreadContext> for X86_64CoreRegs {
 }
 
 impl MultiThreadBase for GdbStubTarget {
-    fn read_(
+    fn read_registers(
         &mut self,
         regs: &mut X86_64CoreRegs,
         tid: Tid
@@ -93,14 +93,42 @@ impl MultiThreadBase for GdbStubTarget {
 
         let rsp0 = thread.saved_rsp0();
         let ctx = thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
+        *regs = X86_64CoreRegs::from(ctx);
+
+        Ok(())
     }
 
-    fn write_(
+    fn write_registers(
         &mut self,
         regs: &X86_64CoreRegs,
         tid: Tid,
     ) -> TargetResult<(), Self> {
-        TargetError::NonFatal
+        let thread = scheduler()
+                    .thread(tid.get())
+                    .ok_or(TargetError::NonFatal)?;
+        
+        let rsp0 = thread.saved_rsp0();
+        let ctx = mut_thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
+        ctx.registers[ThreadRegs::Rax as usize] = regs.regs[0];
+        ctx.registers[ThreadRegs::Rbx as usize] = regs.regs[1];
+        ctx.registers[ThreadRegs::Rcx as usize] = regs.regs[2];
+        ctx.registers[ThreadRegs::Rdx as usize] = regs.regs[3];
+        ctx.registers[ThreadRegs::Rsi as usize] = regs.regs[4];
+        ctx.registers[ThreadRegs::Rdi as usize] = regs.regs[5];
+        ctx.registers[ThreadRegs::Rbx as usize] = regs.regs[6];
+        ctx.rsp = regs.regs[7];
+        ctx.registers[ThreadRegs::R8 as usize] = regs.regs[8];
+        ctx.registers[ThreadRegs::R9 as usize] = regs.regs[9];
+        ctx.registers[ThreadRegs::R10 as usize] = regs.regs[10];
+        ctx.registers[ThreadRegs::R11 as usize] = regs.regs[11];
+        ctx.registers[ThreadRegs::R12 as usize] = regs.regs[12];
+        ctx.registers[ThreadRegs::R13 as usize] = regs.regs[13];
+        ctx.registers[ThreadRegs::R14 as usize] = regs.regs[14];
+        ctx.registers[ThreadRegs::R15 as usize] = regs.regs[15];
+        ctx.registers[ThreadRegs::Rip as usize] = regs.rip;
+        ctx.registers[ThreadRegs::Rflags as usize] = regs.eflags as u64;
+
+        Ok(())
     }
     fn read_addrs(
         &mut self,
@@ -124,7 +152,7 @@ impl MultiThreadBase for GdbStubTarget {
     ) -> Result<(), Self::Error> {
         Ok(())
     }
-}*/
+}
 
 pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
     if rsp.is_null() {
@@ -132,6 +160,19 @@ pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
     }
 
     let registers = unsafe { (rsp.as_u64() as *const [u64; THREAD_REG_COUNT]).read() };
+
+    Some(ThreadContext {
+        registers,
+        rsp: rsp.as_u64(),
+    })
+}
+
+pub fn mut_thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
+    if rsp.is_null() {
+        return None;
+    }
+
+    let registers = unsafe { &mut (rsp.as_u64() as *mut [u64; THREAD_REG_COUNT]).read() };
 
     Some(ThreadContext {
         registers,
