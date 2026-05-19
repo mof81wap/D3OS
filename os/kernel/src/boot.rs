@@ -354,7 +354,6 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
         }
     }
     scheduler().ready(Thread::new_kernel_thread(cleanup, "cleanup"));
-
     scheduler().ready(Thread::new_kernel_thread(debug_thread_context, "debug_thread_context"));
 
     //Initialize tty buffer (Workaround for missing pipes)

@@ -8,8 +8,11 @@ use crate::process::thread::Thread;
 use crate::process::scheduler::Scheduler;
 use crate::scheduler;
 use alloc::sync::Arc;
-use crate::gdbstub::gdbtarget::{thread_context_from_rsp, ThreadRegs};
+use crate::gdbstub::gdbtarget::{thread_context_from_rsp, ThreadRegs, GdbStubTarget};
 use log::info;
+use gdbstub_arch::x86::reg::X86_64CoreRegs;
+use gdbstub::target::ext::base::multithread::MultiThreadBase;
+use gdbstub::common::Tid;
 
 
 pub fn test_com2() {
@@ -114,4 +117,50 @@ pub extern "sysv64" fn debug_thread_context() {
     info!("r14={:#x}", ctx.registers[ThreadRegs::R14 as usize]);
     info!("r15={:#x}", ctx.registers[ThreadRegs::R15 as usize]);
     info!("rflags={:#x}", ctx.registers[ThreadRegs::Rflags as usize]);
+
+    test_gdb_target_ops();
+}
+
+pub fn test_gdb_target_ops() {
+    for n in 1..=4 {
+        let mut target = GdbStubTarget;
+        let mut regs = X86_64CoreRegs::default();
+        let tid = Tid::new(n).unwrap();
+
+        match <GdbStubTarget as MultiThreadBase>::read_registers(&mut target, &mut regs, tid) {
+            Ok(()) => {
+                info!("read_registers ok");
+                info!("rip={:#x} rsp={:#x} rax={:#x}", regs.rip, regs.regs[7], regs.regs[0]);
+                info!("rbx={:#x} rcx={:#x} rdx={:#x}", regs.regs[1], regs.regs[2], regs.regs[3]);
+            }
+            Err(e) => {
+                info!("read_registers failed");
+            }
+        }
+
+        let mut buf = [0u8; 16];
+        let rip = regs.rip;
+
+        match <GdbStubTarget as MultiThreadBase>::read_addrs(&mut target, rip, &mut buf, tid) {
+            Ok(n) => {
+                info!("read_addrs ok: {} bytes at rip={:#x}", n, rip);
+                for b in buf.iter() {
+                    info!("byte={:#x}", *b);
+                }
+            }
+            Err(e) => {
+                info!("read_addrs failed");
+            }
+        }
+
+        let mut count: usize = 0;
+        let result = <GdbStubTarget as MultiThreadBase>::list_active_threads(
+            &mut target,
+            &mut |tid: Tid| {
+                count += 1;
+                info!("active tid={}", tid.get());
+            }
+        );
+        info!("list_active_threads result={:?}, count={}", result, count);
+    }
 }
