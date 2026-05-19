@@ -10,7 +10,7 @@ use crate::{scheduler};
 use x86_64::VirtAddr;
 
 
-struct GdbStubTarget;
+pub struct GdbStubTarget;
 
 const THREAD_REG_COUNT: usize = 19;
 
@@ -54,7 +54,7 @@ impl From<ThreadContext> for X86_64CoreRegs {
         regs.regs[3] = ctx.registers[ThreadRegs::Rdx as usize];
         regs.regs[4] = ctx.registers[ThreadRegs::Rsi as usize];
         regs.regs[5] = ctx.registers[ThreadRegs::Rdi as usize];
-        regs.regs[6] = ctx.registers[ThreadRegs::Rbx as usize];
+        regs.regs[6] = ctx.registers[ThreadRegs::Rbp as usize];
         regs.regs[7] = ctx.rsp; 
         regs.regs[8] = ctx.registers[ThreadRegs::R8 as usize];
         regs.regs[9] = ctx.registers[ThreadRegs::R9 as usize];
@@ -115,7 +115,7 @@ impl MultiThreadBase for GdbStubTarget {
         ctx.registers[ThreadRegs::Rdx as usize] = regs.regs[3];
         ctx.registers[ThreadRegs::Rsi as usize] = regs.regs[4];
         ctx.registers[ThreadRegs::Rdi as usize] = regs.regs[5];
-        ctx.registers[ThreadRegs::Rbx as usize] = regs.regs[6];
+        ctx.registers[ThreadRegs::Rbp as usize] = regs.regs[6];
         ctx.rsp = regs.regs[7];
         ctx.registers[ThreadRegs::R8 as usize] = regs.regs[8];
         ctx.registers[ThreadRegs::R9 as usize] = regs.regs[9];
