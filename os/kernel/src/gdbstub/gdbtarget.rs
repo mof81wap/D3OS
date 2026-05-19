@@ -8,6 +8,7 @@ use gdbstub::common::{Tid};
 use gdbstub::arch::Arch;
 use crate::{scheduler};
 use x86_64::VirtAddr;
+use log::info;
 
 
 pub struct GdbStubTarget;
@@ -87,9 +88,11 @@ impl MultiThreadBase for GdbStubTarget {
         regs: &mut X86_64CoreRegs,
         tid: Tid
     ) -> TargetResult<(), Self> {
+        let raw_tid = tid.get();
         let thread = scheduler()
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
+        info!("gdb tid={} -> thread.id={} saved_rsp0={:#x}", raw_tid, thread.id(), thread.saved_rsp0().as_u64());
 
         let rsp0 = thread.saved_rsp0();
         let ctx = thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
@@ -198,12 +201,14 @@ pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
     if rsp.is_null() {
         return None;
     }
+    let raw_rsp0 = rsp.as_u64();
 
-    let registers = unsafe { (rsp.as_u64() as *const [u64; THREAD_REG_COUNT]).read() };
+    let registers = unsafe { (raw_rsp0 as *const [u64; THREAD_REG_COUNT]).read() };
+    let restored_rsp = raw_rsp0 + (THREAD_REG_COUNT * core::mem::size_of::<u64>()) as u64;
 
     Some(ThreadContext {
         registers,
-        rsp: rsp.as_u64(),
+        rsp: restored_rsp,
     })
 }
 
@@ -212,10 +217,12 @@ pub fn mut_thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
         return None;
     }
 
-    let registers = unsafe { &mut (rsp.as_u64() as *mut [u64; THREAD_REG_COUNT]).read() };
+    let raw_rsp0 = rsp.as_u64();
+    let registers = unsafe { &mut (raw_rsp0 as *mut [u64; THREAD_REG_COUNT]).read() };
+    let restored_rsp = raw_rsp0 + (THREAD_REG_COUNT * core::mem::size_of::<u64>()) as u64;
 
     Some(ThreadContext {
         registers: *registers,
-        rsp: rsp.as_u64(),
+        rsp: restored_rsp,
     })
 }
