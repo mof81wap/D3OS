@@ -46,6 +46,11 @@ pub struct ThreadContext {
     pub rsp: u64,
 }
 
+struct ThreadContextMut<'a> {
+    registers: &'a mut [u64; THREAD_REG_COUNT],
+    rsp: u64,
+}
+
 impl From<ThreadContext> for X86_64CoreRegs {
     fn from(ctx: ThreadContext) -> Self {
         let mut regs = X86_64CoreRegs::default();
@@ -212,17 +217,20 @@ pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
     })
 }
 
-pub fn mut_thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
+pub fn mut_thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContextMut<'static>> {
     if rsp.is_null() {
         return None;
     }
 
     let raw_rsp0 = rsp.as_u64();
-    let registers = unsafe { &mut (raw_rsp0 as *mut [u64; THREAD_REG_COUNT]).read() };
+
+    let registers = unsafe { &mut *(raw_rsp0 as *mut [u64; THREAD_REG_COUNT]) };
     let restored_rsp = raw_rsp0 + (THREAD_REG_COUNT * core::mem::size_of::<u64>()) as u64;
 
-    Some(ThreadContext {
-        registers: *registers,
+
+
+    Some(ThreadContextMut {
+        registers,
         rsp: restored_rsp,
     })
 }
