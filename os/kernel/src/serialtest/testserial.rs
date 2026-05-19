@@ -13,6 +13,8 @@ use log::info;
 use gdbstub_arch::x86::reg::X86_64CoreRegs;
 use gdbstub::target::ext::base::multithread::MultiThreadBase;
 use gdbstub::common::Tid;
+use core::ptr::addr_of_mut;
+
 
 
 pub fn test_com2() {
@@ -119,6 +121,8 @@ pub extern "sysv64" fn debug_thread_context() {
     info!("rflags={:#x}", ctx.registers[ThreadRegs::Rflags as usize]);
 
     test_gdb_target_ops();
+    test_gdb_write_registers();
+    test_gdb_write_addrs();
 }
 
 pub fn test_gdb_target_ops() {
@@ -162,5 +166,65 @@ pub fn test_gdb_target_ops() {
             }
         );
         info!("list_active_threads result={:?}, count={}", result, count);
+    }
+}
+
+pub fn test_gdb_write_registers() {
+    let mut target = GdbStubTarget;
+    let tid = Tid::new(1).unwrap();
+
+    let mut before = X86_64CoreRegs::default();
+    if <GdbStubTarget as MultiThreadBase>::read_registers(&mut target, &mut before, tid).is_err() {
+        info!("read_registers failed");
+    }
+
+    info!("before rax={:#x}", before.regs[0]);
+
+    let mut modified = before.clone();
+    modified.regs[0] = 0x1234_5678_9abc_def0;
+
+    if <GdbStubTarget as MultiThreadBase>::write_registers(&mut target, &modified, tid).is_err() {
+        info!("write_registers failed");
+    }
+
+    let mut after = X86_64CoreRegs::default();
+    if <GdbStubTarget as MultiThreadBase>::read_registers(&mut target, &mut after, tid).is_err() {
+        info!("read_registers failed");
+    }
+
+    info!("after rax={:#x}", after.regs[0]);
+
+    if <GdbStubTarget as MultiThreadBase>::write_registers(&mut target, &before, tid).is_err() {
+        info!("write_registers failed");
+    }
+}
+
+static mut GDB_TEST_MEM: [u8; 8] = [0xaa; 8];
+
+pub fn test_gdb_write_addrs() {
+    let mut target = GdbStubTarget;
+    let tid = Tid::new(1).unwrap();
+
+    let addr = unsafe { addr_of_mut!(GDB_TEST_MEM) as *mut u8 as u64 };
+
+    let mut before = [0u8; 8];
+    if <GdbStubTarget as MultiThreadBase>::read_addrs(&mut target, addr, &mut before, tid).is_err() {
+        info!("read_addrs failed");
+    }
+    info!("before={:?}", before);
+
+    let data = [1, 2, 3, 4, 5, 6, 7, 8];
+    if <GdbStubTarget as MultiThreadBase>::write_addrs(&mut target, addr, &data, tid).is_err() {
+        info!("write_addrs failed");
+    }
+
+    let mut after = [0u8; 8];
+    if <GdbStubTarget as MultiThreadBase>::read_addrs(&mut target, addr, &mut after, tid).is_err() {
+        info!("read_addrs failed");
+    }
+    info!("after={:?}", after);
+
+    if <GdbStubTarget as MultiThreadBase>::write_addrs(&mut target, addr, &before, tid).is_err() {
+        info!("write_addrs failed");
     }
 }
