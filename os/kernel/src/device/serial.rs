@@ -448,6 +448,10 @@ impl SerialPort {
         self.transceiver.read()
     }
 
+    pub fn peek(&self) -> bool {
+        self.transceiver.readable()
+    }
+
     fn hex(n: u8) -> u8 {
         match n {
             0..=9 => b'0' + n,
