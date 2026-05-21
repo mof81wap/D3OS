@@ -14,6 +14,7 @@ use gdbstub_arch::x86::reg::X86_64CoreRegs;
 use gdbstub::target::ext::base::multithread::MultiThreadBase;
 use gdbstub::common::Tid;
 use core::ptr::addr_of_mut;
+use gdbstub::target::ext::breakpoints::{Breakpoints, SwBreakpoint};
 
 
 
@@ -123,6 +124,7 @@ pub extern "sysv64" fn debug_thread_context() {
     test_gdb_target_ops();
     test_gdb_write_registers();
     test_gdb_write_addrs();
+    test_sw_breakpoint();
 }
 
 pub fn test_gdb_target_ops() {
@@ -227,4 +229,24 @@ pub fn test_gdb_write_addrs() {
     if <GdbStubTarget as MultiThreadBase>::write_addrs(&mut target, addr, &before, tid).is_err() {
         info!("write_addrs failed");
     }
+}
+
+pub extern "sysv64" fn breakpoint_test_target() {
+    info!("before breakpoint target");
+    info!("inside breakpoint target");
+    info!("after breakpoint target");
+}
+
+pub fn test_sw_breakpoint() {
+    let mut target = GdbStubTarget::new();
+    let addr = breakpoint_test_target as usize as  u64;
+    info!("bp target addr={:#x}", addr);
+
+    let ok = <GdbStubTarget as SwBreakpoint>::add_sw_breakpoint(&mut target, addr, 1);
+    info!("add_sw_breakpoint ok={}", matches!(ok, Ok(true)));
+
+    breakpoint_test_target();
+
+    //let ok = <GdbStubTarget as SwBreakpoint>::remove_sw_breakpoint(&mut target, addr, 1);
+    info!("returned from breakpoint target");
 }

@@ -13,11 +13,14 @@ use gdbstub::target::ext::breakpoints::{BreakpointsOps, SwBreakpointOps};
 use crate::process::process::Process;
 use alloc::sync::Arc;
 use log::info;
+use volatile::Volatile;
+use x86_64::structures::idt::InterruptStackFrameValue;
+use spin::Mutex;
 
 
 pub struct GdbStubTarget {
     selected_pid: Arc<Process>,
-    breakpoints: [GdbSwBreakpoint; MAX_SW_BREAKPOINTS],
+    breakpoints: Mutex<[GdbSwBreakpoint; MAX_SW_BREAKPOINTS]>,
 }
 
 impl GdbStubTarget {
@@ -27,7 +30,7 @@ impl GdbStubTarget {
 
         Self {
             selected_pid,
-            breakpoints: [bp; MAX_SW_BREAKPOINTS],
+            breakpoints: Mutex::new([bp; MAX_SW_BREAKPOINTS]),
         }
     }
 }
@@ -241,7 +244,7 @@ impl SwBreakpoint for GdbStubTarget {
         addr: <Self::Arch as Arch>::Usize,
         kind: <Self::Arch as Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        for bp in self.breakpoints.iter_mut() {
+        for bp in self.breakpoints.lock().iter_mut() {
             if bp.address == 0 {
                 let virt_addr = addr as u64;
                 let phys_addr = self
@@ -253,6 +256,7 @@ impl SwBreakpoint for GdbStubTarget {
                 let phys_addr_ptr = phys_addr.as_u64() as *mut u8;
                 let instruction = unsafe { phys_addr_ptr.read_volatile() };
                 unsafe { phys_addr_ptr.write_volatile(0xCC) };
+                unsafe { info!("OP CODE AT BREAKPOINT={:#x}", phys_addr_ptr.read_volatile()) };
                 *bp = GdbSwBreakpoint{address: virt_addr, instruction};
 
                 return Ok(true);
@@ -273,7 +277,7 @@ impl SwBreakpoint for GdbStubTarget {
                         .get_phys(virt_addr)
                         .ok_or(TargetError::NonFatal)?;
 
-        for bp in self.breakpoints.iter_mut() {
+        for bp in self.breakpoints.lock().iter_mut() {
             if bp.address == virt_addr {
                 let phys_addr_ptr = unsafe { phys_addr.as_u64() as *mut u8 };
                 let instruction = bp.instruction;
@@ -284,6 +288,19 @@ impl SwBreakpoint for GdbStubTarget {
             }
         }
         Ok(false)
+    }
+}
+
+pub fn handle_breakpoint(mut frame: Volatile<&mut InterruptStackFrameValue>) {
+    let rip_after_int3 = frame.read().instruction_pointer.as_u64();
+    let bp_addr = rip_after_int3 - 1;
+
+    info!("BREAKPOINT AT {:#x}", bp_addr);
+
+    frame.update(|f| f.instruction_pointer = VirtAddr::new(bp_addr));
+
+    loop {
+        
     }
 }
 

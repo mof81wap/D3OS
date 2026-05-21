@@ -11,10 +11,10 @@ use log::{error, info, trace};
 use spin::Mutex;
 use x86_64::registers::control::Cr2;
 use x86_64::{PrivilegeLevel, set_general_handler};
-use x86_64::structures::idt::InterruptStackFrame;
+use x86_64::structures::idt::{InterruptStackFrame, InterruptStackFrameValue};
 use x86_64::structures::paging::page::PageRange;
 use x86_64::structures::paging::{Page, PageTableFlags};
-
+use crate::gdbstub::gdbtarget::handle_breakpoint;
 
 //----PROCFS SUPPORT ------------------------------------------------------------------------//
 // needed to know, if a request was in User- or Kernel-Mode
@@ -180,7 +180,12 @@ pub fn setup_idt() {
     }
 }
 
-fn handle_exception(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
+fn handle_exception(mut frame: InterruptStackFrame, index: u8, error: Option<u64>) {
+    if index == InterruptVector::Breakpoint as u8 {
+        unsafe { handle_breakpoint(frame.as_mut()) };
+        return;
+    }
+
     panic!(
         "CPU Exception: [{} - {:?}]\nError code: [{:?}]\n{:?}",
         index,

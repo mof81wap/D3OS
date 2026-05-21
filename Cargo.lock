@@ -855,6 +855,7 @@ dependencies = [
  "uefi-raw 0.10.0",
  "uuid",
  "virtio-drivers",
+ "volatile",
  "x2apic",
  "x86_64 0.15.4",
 ]
