@@ -14,7 +14,8 @@ impl GdbStubConnection {
     fn new() -> Self {
         let serial_port = SerialPort::new(Com1, Baud115200, 128);
         Self { 
-            serial_port
+            serial_port,
+            peeked: None,
         }
     }
 }
