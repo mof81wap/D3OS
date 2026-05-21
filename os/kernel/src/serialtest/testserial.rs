@@ -127,7 +127,7 @@ pub extern "sysv64" fn debug_thread_context() {
 
 pub fn test_gdb_target_ops() {
     for n in 1..=4 {
-        let mut target = GdbStubTarget;
+        let mut target = GdbStubTarget::new();
         let mut regs = X86_64CoreRegs::default();
         let tid = Tid::new(n).unwrap();
 
@@ -170,7 +170,7 @@ pub fn test_gdb_target_ops() {
 }
 
 pub fn test_gdb_write_registers() {
-    let mut target = GdbStubTarget;
+    let mut target = GdbStubTarget::new();
     let tid = Tid::new(1).unwrap();
 
     let mut before = X86_64CoreRegs::default();
@@ -202,7 +202,7 @@ pub fn test_gdb_write_registers() {
 static mut GDB_TEST_MEM: [u8; 8] = [0xaa; 8];
 
 pub fn test_gdb_write_addrs() {
-    let mut target = GdbStubTarget;
+    let mut target = GdbStubTarget::new();
     let tid = Tid::new(1).unwrap();
 
     let addr = unsafe { addr_of_mut!(GDB_TEST_MEM) as *mut u8 as u64 };

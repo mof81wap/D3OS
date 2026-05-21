@@ -6,14 +6,40 @@ use gdbstub::target::ext::base::multithread::{MultiThreadBase, MultiThreadResume
 use gdbstub::target::ext::base::multithread::{MultiThreadResumeOps, MultiThreadSingleStepOps};
 use gdbstub::common::{Tid};
 use gdbstub::arch::Arch;
-use crate::{scheduler};
+use crate::{scheduler, process_manager};
 use x86_64::VirtAddr;
+use gdbstub::target::ext::breakpoints::{Breakpoints, SwBreakpoint};
+use gdbstub::target::ext::breakpoints::{BreakpointsOps, SwBreakpointOps};
+use crate::process::process::Process;
+use alloc::sync::Arc;
 use log::info;
 
 
-pub struct GdbStubTarget;
+pub struct GdbStubTarget {
+    selected_pid: Arc<Process>,
+    breakpoints: [GdbSwBreakpoint; MAX_SW_BREAKPOINTS],
+}
+
+impl GdbStubTarget {
+    pub fn new() -> Self {
+        let bp = GdbSwBreakpoint{address: 0, instruction: 0x00};
+        let selected_pid = process_manager().read().kernel_process().unwrap();
+
+        Self {
+            selected_pid,
+            breakpoints: [bp; MAX_SW_BREAKPOINTS],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GdbSwBreakpoint {
+    address: u64,
+    instruction: u8,
+}
 
 const THREAD_REG_COUNT: usize = 19;
+const MAX_SW_BREAKPOINTS: usize = 64;
 
 #[repr(u64)]
 #[derive(Clone, Copy, Debug)]
@@ -199,6 +225,65 @@ impl MultiThreadBase for GdbStubTarget {
             }
         }
         Ok(())
+    }
+}
+
+impl Breakpoints for GdbStubTarget {
+    #[inline(always)]
+    fn support_sw_breakpoint(&mut self) -> Option<SwBreakpointOps<Self>> {
+        Some(self)
+    }
+}
+
+impl SwBreakpoint for GdbStubTarget {
+    fn add_sw_breakpoint(
+        &mut self,
+        addr: <Self::Arch as Arch>::Usize,
+        kind: <Self::Arch as Arch>::BreakpointKind,
+    ) -> TargetResult<bool, Self> {
+        for bp in self.breakpoints.iter_mut() {
+            if bp.address == 0 {
+                let virt_addr = addr as u64;
+                let phys_addr = self
+                                .selected_pid
+                                .virtual_address_space
+                                .get_phys(virt_addr)
+                                .ok_or(TargetError::NonFatal)?;
+
+                let phys_addr_ptr = phys_addr.as_u64() as *mut u8;
+                let instruction = unsafe { phys_addr_ptr.read_volatile() };
+                unsafe { phys_addr_ptr.write_volatile(0xCC) };
+                *bp = GdbSwBreakpoint{address: virt_addr, instruction};
+
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn remove_sw_breakpoint(
+        &mut self,
+        addr: <Self::Arch as Arch>::Usize,
+        kind: <Self::Arch as Arch>::BreakpointKind,
+    ) -> TargetResult<bool, Self> {
+        let virt_addr = addr as u64;
+        let phys_addr = self
+                        .selected_pid
+                        .virtual_address_space
+                        .get_phys(virt_addr)
+                        .ok_or(TargetError::NonFatal)?;
+
+        for bp in self.breakpoints.iter_mut() {
+            if bp.address == virt_addr {
+                let phys_addr_ptr = unsafe { phys_addr.as_u64() as *mut u8 };
+                let instruction = bp.instruction;
+                unsafe { phys_addr_ptr.write_volatile(instruction) };
+                *bp = GdbSwBreakpoint{address: 0, instruction: 0x00};
+
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
