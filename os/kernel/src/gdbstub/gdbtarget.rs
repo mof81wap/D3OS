@@ -16,11 +16,12 @@ use log::info;
 use volatile::Volatile;
 use x86_64::structures::idt::InterruptStackFrame;
 use spin::Mutex;
+use alloc::vec::Vec;
 
 
 pub struct GdbStubTarget {
     selected_pid: Arc<Process>,
-    breakpoints: Mutex<[GdbSwBreakpoint; MAX_SW_BREAKPOINTS]>,
+    breakpoints: Mutex<Vec<GdbSwBreakpoint>>,
 }
 
 impl GdbStubTarget {
@@ -30,7 +31,7 @@ impl GdbStubTarget {
 
         Self {
             selected_pid,
-            breakpoints: Mutex::new([bp; MAX_SW_BREAKPOINTS]),
+            breakpoints: Mutex::new(Vec::new()),
         }
     }
 }
@@ -42,7 +43,6 @@ struct GdbSwBreakpoint {
 }
 
 const THREAD_REG_COUNT: usize = 19;
-const MAX_SW_BREAKPOINTS: usize = 64;
 
 #[repr(u64)]
 #[derive(Clone, Copy, Debug)]
@@ -222,19 +222,20 @@ impl SwBreakpoint for GdbStubTarget {
         addr: <Self::Arch as Arch>::Usize,
         kind: <Self::Arch as Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
-        for bp in self.breakpoints.lock().iter_mut() {
-            if bp.address == 0 {
-                let virt_addr = addr as u64;
-                let virt_addr_ptr = virt_addr as *mut u8;
-                let instruction = unsafe { virt_addr_ptr.read_volatile() };
-                unsafe { virt_addr_ptr.write_volatile(0xCC) };
-                unsafe { info!("OP CODE AT BREAKPOINT={:#x}", virt_addr_ptr.read_volatile()) };
-                *bp = GdbSwBreakpoint{address: virt_addr, instruction};
+        let virt_addr = addr as u64;
+        let virt_addr_ptr = virt_addr as *mut u8;
+        let instruction = unsafe { virt_addr_ptr.read_volatile() };
+        let mut breakpoints = self.breakpoints.lock();
 
-                return Ok(true);
-            }
+        if breakpoints.iter().any(|bp| bp.address == virt_addr) {
+            return Ok(true);
         }
-        Ok(false)
+
+        unsafe { virt_addr_ptr.write_volatile(0xCC) };
+        unsafe { info!("OP CODE AT BREAKPOINT={:#x}", virt_addr_ptr.read_volatile()) };
+        breakpoints.push(GdbSwBreakpoint{address: virt_addr, instruction});
+
+        Ok(true)
     }
 
     fn remove_sw_breakpoint(
@@ -243,17 +244,18 @@ impl SwBreakpoint for GdbStubTarget {
         kind: <Self::Arch as Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
         let virt_addr = addr as u64;
-        for bp in self.breakpoints.lock().iter_mut() {
-            if bp.address == virt_addr {
-                let virt_addr_ptr = unsafe { virt_addr as *mut u8 };
-                let instruction = bp.instruction;
-                unsafe { virt_addr_ptr.write_volatile(instruction) };
-                *bp = GdbSwBreakpoint{address: 0, instruction: 0x00};
+        let virt_addr_ptr = unsafe { virt_addr as *mut u8 };
+        let mut breakpoints = self.breakpoints.lock();
 
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        let Some(index) = breakpoints.iter().position(|bp| bp.address == virt_addr) else {
+            return Ok(false);
+        };
+
+        let bp = breakpoints.remove(index);
+        let instruction = bp.instruction;
+        unsafe { virt_addr_ptr.write_volatile(instruction) };
+
+        Ok(true)
     }
 }
 

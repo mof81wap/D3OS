@@ -247,6 +247,6 @@ pub fn test_sw_breakpoint() {
 
     breakpoint_test_target();
 
-    //let ok = <GdbStubTarget as SwBreakpoint>::remove_sw_breakpoint(&mut target, addr, 1);
+    let ok = <GdbStubTarget as SwBreakpoint>::remove_sw_breakpoint(&mut target, addr, 1);
     info!("returned from breakpoint target");
 }
