@@ -170,6 +170,7 @@ pub fn setup_idt() {
     set_general_handler!(&mut idt, handle_exception, 0..31);
     set_general_handler!(&mut idt, handle_interrupt, 32..255);
     set_general_handler!(&mut idt, handle_page_fault, 14);
+    set_general_handler!(&mut idt, handle_breakpoint, 3);
 
     unsafe {
         // We need to obtain a static reference to the IDT for the following operation.
@@ -180,12 +181,7 @@ pub fn setup_idt() {
     }
 }
 
-fn handle_exception(mut frame: InterruptStackFrame, index: u8, error: Option<u64>) {
-    if index == InterruptVector::Breakpoint as u8 {
-        unsafe { handle_breakpoint(frame.as_mut()) };
-        return;
-    }
-
+fn handle_exception(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
     panic!(
         "CPU Exception: [{} - {:?}]\nError code: [{:?}]\n{:?}",
         index,

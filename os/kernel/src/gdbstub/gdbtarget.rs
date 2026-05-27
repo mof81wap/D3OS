@@ -14,7 +14,7 @@ use crate::process::process::Process;
 use alloc::sync::Arc;
 use log::info;
 use volatile::Volatile;
-use x86_64::structures::idt::InterruptStackFrameValue;
+use x86_64::structures::idt::InterruptStackFrame;
 use spin::Mutex;
 
 
@@ -173,21 +173,10 @@ impl MultiThreadBase for GdbStubTarget {
         data: &mut [u8],
         tid: Tid
     ) -> TargetResult<usize, Self> {
-        let thread = scheduler()
-                    .thread(tid.get())
-                    .ok_or(TargetError::NonFatal)?;
-
-        let process = thread.process();
-
         for (offset, byte) in data.iter_mut().enumerate() {
             let virt_addr = start_addr + offset as u64;
 
-            let phys_addr = process
-                            .virtual_address_space
-                            .get_phys(virt_addr)
-                            .ok_or(TargetError::NonFatal)?;
-
-            unsafe { *byte = *(phys_addr.as_u64() as *const u8); }
+            unsafe { *byte = *(virt_addr as *const u8); }
         }
         Ok(data.len())
     }
@@ -197,21 +186,10 @@ impl MultiThreadBase for GdbStubTarget {
         data: &[u8],
         tid: Tid
     ) -> TargetResult<(), Self> {
-        let thread = scheduler()
-                    .thread(tid.get())
-                    .ok_or(TargetError::NonFatal)?;
-
-        let process = thread.process();
-
         for (offset, byte) in data.iter().enumerate() {
             let virt_addr = start_addr + offset as u64;
 
-            let phys_addr = process
-                            .virtual_address_space
-                            .get_phys(virt_addr)
-                            .ok_or(TargetError::NonFatal)?;
-
-            unsafe { *(phys_addr.as_u64() as *mut u8) = *byte; }
+            unsafe { *(virt_addr as *mut u8) = *byte; }
         }
 
         Ok(())
@@ -247,16 +225,10 @@ impl SwBreakpoint for GdbStubTarget {
         for bp in self.breakpoints.lock().iter_mut() {
             if bp.address == 0 {
                 let virt_addr = addr as u64;
-                let phys_addr = self
-                                .selected_pid
-                                .virtual_address_space
-                                .get_phys(virt_addr)
-                                .ok_or(TargetError::NonFatal)?;
-
-                let phys_addr_ptr = phys_addr.as_u64() as *mut u8;
-                let instruction = unsafe { phys_addr_ptr.read_volatile() };
-                unsafe { phys_addr_ptr.write_volatile(0xCC) };
-                unsafe { info!("OP CODE AT BREAKPOINT={:#x}", phys_addr_ptr.read_volatile()) };
+                let virt_addr_ptr = virt_addr as *mut u8;
+                let instruction = unsafe { virt_addr_ptr.read_volatile() };
+                unsafe { virt_addr_ptr.write_volatile(0xCC) };
+                unsafe { info!("OP CODE AT BREAKPOINT={:#x}", virt_addr_ptr.read_volatile()) };
                 *bp = GdbSwBreakpoint{address: virt_addr, instruction};
 
                 return Ok(true);
@@ -271,17 +243,11 @@ impl SwBreakpoint for GdbStubTarget {
         kind: <Self::Arch as Arch>::BreakpointKind,
     ) -> TargetResult<bool, Self> {
         let virt_addr = addr as u64;
-        let phys_addr = self
-                        .selected_pid
-                        .virtual_address_space
-                        .get_phys(virt_addr)
-                        .ok_or(TargetError::NonFatal)?;
-
         for bp in self.breakpoints.lock().iter_mut() {
             if bp.address == virt_addr {
-                let phys_addr_ptr = unsafe { phys_addr.as_u64() as *mut u8 };
+                let virt_addr_ptr = unsafe { virt_addr as *mut u8 };
                 let instruction = bp.instruction;
-                unsafe { phys_addr_ptr.write_volatile(instruction) };
+                unsafe { virt_addr_ptr.write_volatile(instruction) };
                 *bp = GdbSwBreakpoint{address: 0, instruction: 0x00};
 
                 return Ok(true);
@@ -291,17 +257,11 @@ impl SwBreakpoint for GdbStubTarget {
     }
 }
 
-pub fn handle_breakpoint(mut frame: Volatile<&mut InterruptStackFrameValue>) {
-    let rip_after_int3 = frame.read().instruction_pointer.as_u64();
+pub fn handle_breakpoint(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
+    let rip_after_int3 = frame.instruction_pointer.as_u64();
     let bp_addr = rip_after_int3 - 1;
 
     info!("BREAKPOINT AT {:#x}", bp_addr);
-
-    frame.update(|f| f.instruction_pointer = VirtAddr::new(bp_addr));
-
-    loop {
-        
-    }
 }
 
 pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
