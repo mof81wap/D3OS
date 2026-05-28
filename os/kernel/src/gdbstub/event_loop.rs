@@ -3,10 +3,30 @@ use gdbstub::stub::GdbStub;
 use gdbstub::stub::MultiThreadStopReason;
 use gdbstub::target::Target;
 use gdbstub::stub::run_blocking::{BlockingEventLoop, Event, WaitForStopReasonError};
-use crate::gdbstub::debug_state{GDB_DEBUG_STATE, DebugEvent};
+use crate::gdbstub::debug_state::{GDB_DEBUG_STATE, DebugEvent};
 use core::arch::asm;
+use crate::gdbstub::gdbtarget::GdbStubTarget;
+use crate::gdbstub::gdbconnection::GdbStubConnection;
+use gdbstub::conn::{Connection, ConnectionExt};
+use gdbstub::common::Tid;
+use log::info;
 
 enum GdbBlockingEventLoop{}
+
+pub extern "sysv64" fn init_gdb_stub() {
+    info!("ENTERING init_gdb_stub");
+
+    {
+        let mut state = GDB_DEBUG_STATE.lock();
+        state.event = Some(DebugEvent::CtrlC);
+    }
+
+    let conn = GdbStubConnection::new();
+    let mut target = GdbStubTarget::new();
+    GdbStub::builder(conn).with_packet_buffer(&mut [0u8; 4096]).build().expect("ERROR init_gdb_stub").run_blocking::<GdbBlockingEventLoop>(&mut target).unwrap();
+    unsafe {asm!("int3");}
+    info!("EXITING init_gdb_stub");
+}
 
 impl BlockingEventLoop for GdbBlockingEventLoop {
     type Target = GdbStubTarget;

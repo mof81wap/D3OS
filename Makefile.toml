@@ -37,7 +37,8 @@ args = [
     "-vga", "none",
     "-rtc", "base=localtime",
     "-serial", "stdio",
-    "-serial", "telnet:localhost:4321,server,nowait",
+    "-serial", "file:towboot-com2.log",
+    "-serial", "tcp:127.0.0.1:4321,server=on,wait=off,nodelay=on",
     #"-trace", "virtio_gpu_*",
     #"-trace", "virtio_gpu_virgl_process_cmd",
 
@@ -84,6 +85,7 @@ args = [
     "-vga", "std",
     "-rtc", "base=localtime",
     "-serial", "stdio",
+    "-serial", "telnet:localhost:4321,server,nowait",
 
     # Hard disk drive configuration
     "-device", "piix3-ide,id=ide",  # IDE Controller
@@ -121,6 +123,7 @@ args = [
     "-vga", "none",
     "-rtc", "base=localtime",
     "-serial", "stdio",
+    "-serial", "telnet:localhost:4321,server,nowait",
 
     # Hard disk drive configuration
     "-device", "piix3-ide,id=ide",  # IDE Controller

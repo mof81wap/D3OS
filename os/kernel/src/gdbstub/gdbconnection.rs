@@ -1,18 +1,18 @@
 use crate::device::serial::SerialPort;
-use crate::device::serial::ComPort::{Com1, Com2};
+use crate::device::serial::ComPort::{Com1, Com2, Com3};
 use crate::device::serial::BaudRate::{Baud115200};
 use stream::OutputStream;
 use stream::DecodedInputStream;
 use gdbstub::conn::{Connection, ConnectionExt};
 
-struct GdbStubConnection {
+pub struct GdbStubConnection {
     serial_port: SerialPort,
     peeked: Option<u8>,
 }
 
 impl GdbStubConnection {
-    fn new() -> Self {
-        let serial_port = SerialPort::new(Com1, Baud115200, 128);
+    pub fn new() -> Self {
+        let serial_port = SerialPort::new(Com3, Baud115200, 128);
         Self { 
             serial_port,
             peeked: None,
@@ -51,7 +51,7 @@ impl ConnectionExt for GdbStubConnection {
             return Ok(Some(byte));
         }
 
-        if let Some(byte) = self.serial.try_read_polled() {
+        if let Some(byte) = self.serial_port.try_read_polled() {
             self.peeked = Some(byte);
             return Ok(Some(byte));
         }

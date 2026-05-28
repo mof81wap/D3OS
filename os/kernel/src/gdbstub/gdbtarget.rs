@@ -28,7 +28,6 @@ pub struct GdbStubTarget {
 
 impl GdbStubTarget {
     pub fn new() -> Self {
-        let bp = GdbSwBreakpoint{address: 0, instruction: 0x00};
         let selected_pid = process_manager().read().kernel_process().unwrap();
 
         Self {
@@ -115,6 +114,11 @@ impl Target for GdbStubTarget {
     #[inline(always)]
     fn base_ops(&mut self) -> BaseOps<Self::Arch, Self::Error> {
         BaseOps::MultiThread(self)
+    }
+
+    #[inline(always)]
+    fn support_breakpoints(&mut self) -> Option<BreakpointsOps<Self>> {
+        Some(self)
     }
 }
 
@@ -295,7 +299,7 @@ pub fn handle_breakpoint(frame: InterruptStackFrame, index: u8, error: Option<u6
     if state.ctrlc_pending {
         state.ctrlc_pending = false;
         state.event = Some(DebugEvent::CtrlC);
-        info!("GDB CTRL-C at RIP={:#x}", rip_after_int3);
+        info!("GDB CTRL-C at RIP={:#x}---------------------------------------------------------------------------------------------------------------", rip_after_int3);
         return;
     }
 
