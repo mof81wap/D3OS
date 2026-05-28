@@ -174,11 +174,23 @@ impl MultiThreadBase for GdbStubTarget {
         data: &mut [u8],
         tid: Tid
     ) -> TargetResult<usize, Self> {
+        let thread = scheduler()
+                    .thread(tid.get())
+                    .ok_or(TargetError::NonFatal)?;
+
+        let process = thread.process();
+
         for (offset, byte) in data.iter_mut().enumerate() {
             let virt_addr = start_addr + offset as u64;
 
-            unsafe { *byte = *(virt_addr as *const u8); }
+            let phys_addr = process
+                            .virtual_address_space
+                            .get_phys(virt_addr)
+                            .ok_or(TargetError::NonFatal)?;
+
+            unsafe { *byte = *(phys_addr.as_u64() as *const u8); }
         }
+
         Ok(data.len())
     }
     fn write_addrs(
@@ -187,11 +199,23 @@ impl MultiThreadBase for GdbStubTarget {
         data: &[u8],
         tid: Tid
     ) -> TargetResult<(), Self> {
+        let thread = scheduler()
+                    .thread(tid.get())
+                    .ok_or(TargetError::NonFatal)?;
+
+        let process = thread.process();
+
         for (offset, byte) in data.iter().enumerate() {
             let virt_addr = start_addr + offset as u64;
 
-            unsafe { *(virt_addr as *mut u8) = *byte; }
+            let phys_addr = process
+                            .virtual_address_space
+                            .get_phys(virt_addr)
+                            .ok_or(TargetError::NonFatal)?;
+
+            unsafe { *(phys_addr.as_u64() as *mut u8) = *byte; }
         }
+
 
         Ok(())
     }
