@@ -2,7 +2,7 @@ use gdbstub::target::{Target, TargetResult, TargetError};
 use gdbstub_arch::x86::X86_64_SSE;
 use gdbstub_arch::x86::reg::X86_64CoreRegs;
 use gdbstub::target::ext::base::BaseOps;
-use gdbstub::target::ext::base::multithread::{MultiThreadBase, MultiThreadResume, MultiThreadSingleStep, MultiThreadStopReason};
+use gdbstub::target::ext::base::multithread::{MultiThreadBase, MultiThreadResume, MultiThreadSingleStep};
 use gdbstub::target::ext::base::multithread::{MultiThreadResumeOps, MultiThreadSingleStepOps};
 use gdbstub::common::{Tid};
 use gdbstub::arch::Arch;
@@ -17,7 +17,8 @@ use volatile::Volatile;
 use x86_64::structures::idt::InterruptStackFrame;
 use spin::Mutex;
 use alloc::vec::Vec;
-use crate::gdbstub::debug_state{GDB_DEBUG_STATE, DebugEvent};
+use crate::gdbstub::debug_state::{GDB_DEBUG_STATE, DebugEvent};
+use gdbstub::stub::MultiThreadStopReason;
 
 
 pub struct GdbStubTarget {
@@ -290,9 +291,17 @@ pub fn handle_breakpoint(frame: InterruptStackFrame, index: u8, error: Option<u6
 
     let tid = scheduler().current_thread().id();
     let mut state = GDB_DEBUG_STATE.lock();
+
+    if state.ctrlc_pending {
+        state.ctrlc_pending = false;
+        state.event = Some(DebugEvent::CtrlC);
+        info!("GDB CTRL-C at RIP={:#x}", rip_after_int3);
+        return;
+    }
+
     state.event = Some(DebugEvent::SwBreakpoint {
         tid,
-        addr = bp_addr,
+        addr: bp_addr,
     });
 
     info!("BREAKPOINT AT {:#x}", bp_addr);
