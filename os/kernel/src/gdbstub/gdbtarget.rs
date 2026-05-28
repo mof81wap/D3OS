@@ -2,7 +2,7 @@ use gdbstub::target::{Target, TargetResult, TargetError};
 use gdbstub_arch::x86::X86_64_SSE;
 use gdbstub_arch::x86::reg::X86_64CoreRegs;
 use gdbstub::target::ext::base::BaseOps;
-use gdbstub::target::ext::base::multithread::{MultiThreadBase, MultiThreadResume, MultiThreadSingleStep};
+use gdbstub::target::ext::base::multithread::{MultiThreadBase, MultiThreadResume, MultiThreadSingleStep, MultiThreadStopReason};
 use gdbstub::target::ext::base::multithread::{MultiThreadResumeOps, MultiThreadSingleStepOps};
 use gdbstub::common::{Tid};
 use gdbstub::arch::Arch;
@@ -17,6 +17,7 @@ use volatile::Volatile;
 use x86_64::structures::idt::InterruptStackFrame;
 use spin::Mutex;
 use alloc::vec::Vec;
+use crate::gdbstub::debug_state{GDB_DEBUG_STATE, DebugEvent};
 
 
 pub struct GdbStubTarget {
@@ -262,6 +263,13 @@ impl SwBreakpoint for GdbStubTarget {
 pub fn handle_breakpoint(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
     let rip_after_int3 = frame.instruction_pointer.as_u64();
     let bp_addr = rip_after_int3 - 1;
+
+    let tid = scheduler().current_thread().id();
+    let mut state = GDB_DEBUG_STATE.lock();
+    state.event = Some(DebugEvent::SwBreakpoint {
+        tid,
+        addr = bp_addr,
+    });
 
     info!("BREAKPOINT AT {:#x}", bp_addr);
 }
