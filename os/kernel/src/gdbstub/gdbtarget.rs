@@ -19,12 +19,14 @@ use spin::Mutex;
 use alloc::vec::Vec;
 use crate::gdbstub::debug_state::{GDB_DEBUG_STATE, DebugEvent};
 use gdbstub::stub::MultiThreadStopReason;
-use crate::device::cpu::{disable_int_nested};
+use crate::device::cpu::{disable_int_nested, enable_int_nested};
+use gdbstub::common::Signal;
 
 
 pub struct GdbStubTarget {
     selected_pid: Arc<Process>,
     breakpoints: Mutex<Vec<GdbSwBreakpoint>>,
+    resume_actions: Mutex<Vec<(usize, ResumeAction)>>,
 }
 
 impl GdbStubTarget {
@@ -34,6 +36,7 @@ impl GdbStubTarget {
         Self {
             selected_pid,
             breakpoints: Mutex::new(Vec::new()),
+            resume_actions: Mutex::new(Vec::new()),
         }
     }
 }
@@ -42,6 +45,11 @@ impl GdbStubTarget {
 struct GdbSwBreakpoint {
     address: u64,
     instruction: u8,
+}
+
+enum ResumeAction {
+    Continue,
+    Step,
 }
 
 const THREAD_REG_COUNT: usize = 19;
@@ -238,6 +246,11 @@ impl MultiThreadBase for GdbStubTarget {
         }
         Ok(())
     }
+
+    #[inline(always)]
+    fn support_resume(&mut self) -> Option<MultiThreadResumeOps<Self>> {
+        Some(self)
+    }
 }
 
 impl Breakpoints for GdbStubTarget {
@@ -287,6 +300,38 @@ impl SwBreakpoint for GdbStubTarget {
         unsafe { virt_addr_ptr.write_volatile(instruction) };
 
         Ok(true)
+    }
+}
+
+impl MultiThreadResume for GdbStubTarget {
+
+    fn resume(&mut self) -> Result<(), Self::Error> {
+        let actions = self.resume_actions.lock();
+
+        {
+            let mut state = GDB_DEBUG_STATE.lock();
+            state.event = None;
+        }
+        enable_int_nested(true);
+        Ok(())
+    }
+
+    fn clear_resume_actions(&mut self) -> Result<(), Self::Error> {
+        self.resume_actions.lock().clear();
+        
+        Ok(())
+    }
+
+    fn set_resume_action_continue(
+        &mut self,
+        tid: Tid,
+        signal: Option<Signal>,
+    ) -> Result<(), Self::Error> {
+        self.resume_actions
+            .lock()
+            .push((tid.get(), ResumeAction::Continue));
+
+        Ok(())
     }
 }
 
