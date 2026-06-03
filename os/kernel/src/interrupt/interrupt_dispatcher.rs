@@ -14,7 +14,8 @@ use x86_64::{PrivilegeLevel, set_general_handler};
 use x86_64::structures::idt::{InterruptStackFrame, InterruptStackFrameValue};
 use x86_64::structures::paging::page::PageRange;
 use x86_64::structures::paging::{Page, PageTableFlags};
-use crate::gdbstub::gdbtarget::handle_breakpoint;
+use crate::gdbstub::gdbtarget;
+use crate::gdbstub::debug_state::GDB_DEBUG_STATE;
 
 //----PROCFS SUPPORT ------------------------------------------------------------------------//
 // needed to know, if a request was in User- or Kernel-Mode
@@ -170,7 +171,6 @@ pub fn setup_idt() {
     set_general_handler!(&mut idt, handle_exception, 0..31);
     set_general_handler!(&mut idt, handle_interrupt, 32..255);
     set_general_handler!(&mut idt, handle_page_fault, 14);
-    set_general_handler!(&mut idt, handle_breakpoint, 3);
 
     unsafe {
         // We need to obtain a static reference to the IDT for the following operation.
@@ -182,6 +182,16 @@ pub fn setup_idt() {
 }
 
 fn handle_exception(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
+    let gdb_enabled = {
+        let state = GDB_DEBUG_STATE.lock();
+        state.gdbstub_is_initilaized
+    };
+
+    if gdb_enabled {
+        gdbtarget::handle_interrupt(frame, index, error);
+        return;
+    }
+
     panic!(
         "CPU Exception: [{} - {:?}]\nError code: [{:?}]\n{:?}",
         index,

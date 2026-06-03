@@ -10,22 +10,25 @@ use crate::gdbstub::gdbconnection::GdbStubConnection;
 use gdbstub::conn::{Connection, ConnectionExt};
 use gdbstub::common::Tid;
 use log::info;
+use gdbstub::target::ext::breakpoints::SwBreakpoint;
+use crate::device::cpu::{disable_int_nested};
+use crate::{scheduler};
 
 enum GdbBlockingEventLoop{}
 
 pub extern "sysv64" fn init_gdb_stub() {
-    info!("ENTERING init_gdb_stub");
+    let tid = scheduler().current_thread().id();
 
     {
         let mut state = GDB_DEBUG_STATE.lock();
-        state.event = Some(DebugEvent::CtrlC);
+        state.gdbstub_is_initilaized = true;
     }
 
     let conn = GdbStubConnection::new();
     let mut target = GdbStubTarget::new();
+    disable_int_nested();
+
     GdbStub::builder(conn).with_packet_buffer(&mut [0u8; 4096]).build().expect("ERROR init_gdb_stub").run_blocking::<GdbBlockingEventLoop>(&mut target).unwrap();
-    unsafe {asm!("int3");}
-    info!("EXITING init_gdb_stub");
 }
 
 impl BlockingEventLoop for GdbBlockingEventLoop {
@@ -58,6 +61,7 @@ impl BlockingEventLoop for GdbBlockingEventLoop {
                     DebugEvent::CtrlC => {
                         return Ok(Event::TargetStopped(MultiThreadStopReason::Signal(Signal::SIGINT)));
                     }
+                    //unbedingt continue als nächstes mit enable_int_nested()
                 }
             }
         }
@@ -71,9 +75,7 @@ impl BlockingEventLoop for GdbBlockingEventLoop {
             state.ctrlc_pending = true;
         }
 
-        unsafe {
-            asm!("int3");
-        }
+        disable_int_nested();
 
         Ok(None)
     }

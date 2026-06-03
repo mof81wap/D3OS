@@ -19,6 +19,7 @@ use spin::Mutex;
 use alloc::vec::Vec;
 use crate::gdbstub::debug_state::{GDB_DEBUG_STATE, DebugEvent};
 use gdbstub::stub::MultiThreadStopReason;
+use crate::device::cpu::{disable_int_nested};
 
 
 pub struct GdbStubTarget {
@@ -289,7 +290,8 @@ impl SwBreakpoint for GdbStubTarget {
     }
 }
 
-pub fn handle_breakpoint(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
+pub fn handle_interrupt(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
+    disable_int_nested();
     let rip_after_int3 = frame.instruction_pointer.as_u64();
     let bp_addr = rip_after_int3 - 1;
 
