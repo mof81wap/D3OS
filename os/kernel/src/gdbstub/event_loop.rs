@@ -18,17 +18,30 @@ enum GdbBlockingEventLoop{}
 
 pub extern "sysv64" fn init_gdb_stub() {
     let tid = scheduler().current_thread().id();
+    info!("GDB INIT TID={}", tid);
 
     {
         let mut state = GDB_DEBUG_STATE.lock();
         state.gdbstub_is_initilaized = true;
+        state.gdb_stub_tid = Some(tid);
     }
 
     let conn = GdbStubConnection::new();
     let mut target = GdbStubTarget::new();
     disable_int_nested();
 
-    GdbStub::builder(conn).with_packet_buffer(&mut [0u8; 4096]).build().expect("ERROR init_gdb_stub").run_blocking::<GdbBlockingEventLoop>(&mut target).unwrap();
+    match GdbStub::builder(conn)
+        .with_packet_buffer(&mut [0u8; 4096])
+        .build()
+        .expect("ERROR init_gdb_stub")
+        .run_blocking::<GdbBlockingEventLoop>(&mut target)
+    {
+        Ok(_) => {}
+        Err(e) => {
+            panic!("GDB stub exited: {:?}", e);
+        }
+    }
+    panic!("GDB stub thread must never exit");
 }
 
 impl BlockingEventLoop for GdbBlockingEventLoop {
@@ -51,7 +64,12 @@ impl BlockingEventLoop for GdbBlockingEventLoop {
                 return Ok(Event::IncomingData(byte));
             }
 
-            if let Some(event) = GDB_DEBUG_STATE.lock().event.take() {
+            let event = {
+                let mut state = GDB_DEBUG_STATE.lock();
+                state.event.take()
+            };
+
+            if let Some(event) = event {
                 match event {
                     DebugEvent::SwBreakpoint { tid, addr: _ } => {
                         let tid = Tid::new(tid).unwrap();
@@ -61,9 +79,9 @@ impl BlockingEventLoop for GdbBlockingEventLoop {
                     DebugEvent::CtrlC => {
                         return Ok(Event::TargetStopped(MultiThreadStopReason::Signal(Signal::SIGINT)));
                     }
-                    //unbedingt continue als nächstes mit enable_int_nested()
                 }
             }
+            scheduler().yield_now();
         }
     }
 

@@ -2,8 +2,8 @@ use gdbstub::target::{Target, TargetResult, TargetError};
 use gdbstub_arch::x86::X86_64_SSE;
 use gdbstub_arch::x86::reg::X86_64CoreRegs;
 use gdbstub::target::ext::base::BaseOps;
-use gdbstub::target::ext::base::multithread::{MultiThreadBase, MultiThreadResume, MultiThreadSingleStep};
-use gdbstub::target::ext::base::multithread::{MultiThreadResumeOps, MultiThreadSingleStepOps};
+use gdbstub::target::ext::base::multithread::{MultiThreadBase, MultiThreadResume, MultiThreadSingleStep, MultiThreadSchedulerLocking};
+use gdbstub::target::ext::base::multithread::{MultiThreadResumeOps, MultiThreadSingleStepOps, MultiThreadSchedulerLockingOps};
 use gdbstub::common::{Tid};
 use gdbstub::arch::Arch;
 use crate::{scheduler, process_manager};
@@ -15,17 +15,18 @@ use alloc::sync::Arc;
 use log::info;
 use volatile::Volatile;
 use x86_64::structures::idt::InterruptStackFrame;
+use x86_64::registers::rflags::RFlags;
 use spin::Mutex;
 use alloc::vec::Vec;
-use crate::gdbstub::debug_state::{GDB_DEBUG_STATE, DebugEvent};
+use crate::gdbstub::debug_state::{GDB_DEBUG_STATE, DebugEvent, StepOver};
 use gdbstub::stub::MultiThreadStopReason;
 use crate::device::cpu::{disable_int_nested, enable_int_nested};
+use crate::process::thread::ThreadState;
 use gdbstub::common::Signal;
 
 
 pub struct GdbStubTarget {
     selected_pid: Arc<Process>,
-    breakpoints: Mutex<Vec<GdbSwBreakpoint>>,
     resume_actions: Mutex<Vec<(usize, ResumeAction)>>,
 }
 
@@ -35,24 +36,25 @@ impl GdbStubTarget {
 
         Self {
             selected_pid,
-            breakpoints: Mutex::new(Vec::new()),
             resume_actions: Mutex::new(Vec::new()),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-struct GdbSwBreakpoint {
+pub struct GdbSwBreakpoint {
     address: u64,
     instruction: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
 enum ResumeAction {
     Continue,
-    Step,
+    SingleStep,
 }
 
 const THREAD_REG_COUNT: usize = 19;
+const RFLAGS_TF: u64 = 0x100;
 
 #[repr(u64)]
 #[derive(Clone, Copy, Debug)]
@@ -85,9 +87,11 @@ pub struct ThreadContext {
     pub rsp: u64,
 }
 
-struct ThreadContextMut<'a> {
-    registers: &'a mut [u64; THREAD_REG_COUNT],
-    rsp: u64,
+#[repr(C)]
+#[derive(Debug)]
+pub struct ThreadContextMut<'a> {
+    pub registers: &'a mut [u64; THREAD_REG_COUNT],
+    pub rsp: u64,
 }
 
 impl From<ThreadContext> for X86_64CoreRegs {
@@ -146,6 +150,20 @@ impl MultiThreadBase for GdbStubTarget {
         let rsp0 = thread.saved_rsp0();
         let ctx = thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
         *regs = X86_64CoreRegs::from(ctx);
+
+        let stopped_rip = {
+            let state = GDB_DEBUG_STATE.lock();
+            if state.stopped_tid == Some(tid.get()) {
+                state.stopped_rip
+            } else {
+                None
+            }
+        };
+
+        if let Some(rip) = stopped_rip {
+            regs.rip = rip;
+        }
+        info!("READ_REGS tid={} rip={:#x} eflags={:#x}", tid.get(), regs.rip, regs.eflags);
 
         Ok(())
     }
@@ -237,7 +255,7 @@ impl MultiThreadBase for GdbStubTarget {
         &mut self,
         thread_is_active: &mut dyn FnMut(Tid)
     ) -> Result<(), Self::Error> {
-        let active_ids = scheduler().active_thread_ids();
+        let active_ids = scheduler().gdb_thread_ids();
 
         for id in active_ids {
             if id != 0 {
@@ -268,16 +286,24 @@ impl SwBreakpoint for GdbStubTarget {
     ) -> TargetResult<bool, Self> {
         let virt_addr = addr as u64;
         let virt_addr_ptr = virt_addr as *mut u8;
-        let instruction = unsafe { virt_addr_ptr.read_volatile() };
-        let mut breakpoints = self.breakpoints.lock();
 
-        if breakpoints.iter().any(|bp| bp.address == virt_addr) {
-            return Ok(true);
+        {
+            let state = GDB_DEBUG_STATE.lock();
+            if state.breakpoints.iter().any(|bp| bp.address == virt_addr) {
+                return Ok(true);
+            }
         }
 
+        let instruction = unsafe { virt_addr_ptr.read_volatile() };
+
+        unsafe { info!("OP CODE AT BREAKPOINT={:#x}", virt_addr_ptr.read_volatile()) };
         unsafe { virt_addr_ptr.write_volatile(0xCC) };
         unsafe { info!("OP CODE AT BREAKPOINT={:#x}", virt_addr_ptr.read_volatile()) };
-        breakpoints.push(GdbSwBreakpoint{address: virt_addr, instruction});
+
+        {
+            let mut state = GDB_DEBUG_STATE.lock();
+            state.breakpoints.push(GdbSwBreakpoint{address: virt_addr, instruction});
+        }
 
         Ok(true)
     }
@@ -289,13 +315,15 @@ impl SwBreakpoint for GdbStubTarget {
     ) -> TargetResult<bool, Self> {
         let virt_addr = addr as u64;
         let virt_addr_ptr = unsafe { virt_addr as *mut u8 };
-        let mut breakpoints = self.breakpoints.lock();
 
-        let Some(index) = breakpoints.iter().position(|bp| bp.address == virt_addr) else {
-            return Ok(false);
+        let bp = {
+            let mut state = GDB_DEBUG_STATE.lock();
+            let Some(index) = state.breakpoints.iter().position(|bp| bp.address == virt_addr) else {
+                return Ok(false);
+            };
+            state.breakpoints.remove(index)
         };
 
-        let bp = breakpoints.remove(index);
         let instruction = bp.instruction;
         unsafe { virt_addr_ptr.write_volatile(instruction) };
 
@@ -306,18 +334,84 @@ impl SwBreakpoint for GdbStubTarget {
 impl MultiThreadResume for GdbStubTarget {
 
     fn resume(&mut self) -> Result<(), Self::Error> {
-        let actions = self.resume_actions.lock();
+        info!("ENTERING RESUME");
+        let actions = self.resume_actions.lock()
+                                        .clone();
+
+        let sw_break = {
+            GDB_DEBUG_STATE.lock().stopped_at_sw_break
+        };
+
+        if sw_break.is_none() {
+            info!("RESUME, no stopped breakpoint");
+            scheduler().debug_resume_all();
+            enable_int_nested(true);
+            scheduler().yield_now();
+            return Ok(());
+        }
+
+        if actions.is_empty() {
+            info!("DEFAULT RESUME");
+
+            let stopped = {
+                let mut state = GDB_DEBUG_STATE.lock();
+                state.stepping = false;
+                state.stopped_at_sw_break.take()
+            };
+
+            if let Some((tid, addr)) = stopped {
+                info!("resume from SW breakpoint tid={} addr={:#x}", tid, addr);
+
+                restore_original_byte(addr);
+
+                scheduler().debug_resume_thread(tid);
+            } else {
+                info!("resume initial/no breakpoint");
+                scheduler().debug_resume_all();
+            }
+
+            enable_int_nested(true);
+            scheduler().yield_now();
+            return Ok(());
+        }
+
+        for (tid, action) in actions.iter() {
+            let thread = scheduler()
+                .thread(*tid)
+                .ok_or(())?;
+
+            let rsp = thread.saved_rsp0();
+            let mut ctx = mut_thread_context_from_rsp(rsp).ok_or(())?;
+
+            match action {
+                ResumeAction::Continue => {
+                    info!("CONTINUE");
+                    let mut state = GDB_DEBUG_STATE.lock();
+                    state.stepping = false;
+                    state.event = None;
+                    scheduler().debug_resume_thread(*tid);
+                }
+                ResumeAction::SingleStep => {
+                    let mut state = GDB_DEBUG_STATE.lock();
+                    state.stepping = true;
+                    scheduler().debug_resume_thread(*tid);
+                }
+            }
+        }
 
         {
             let mut state = GDB_DEBUG_STATE.lock();
             state.event = None;
         }
         enable_int_nested(true);
+        scheduler().yield_now();
+        info!("EXITING RESUME");
         Ok(())
     }
 
     fn clear_resume_actions(&mut self) -> Result<(), Self::Error> {
         self.resume_actions.lock().clear();
+        info!("CLEAR RESUME ACTIONS");
         
         Ok(())
     }
@@ -327,35 +421,198 @@ impl MultiThreadResume for GdbStubTarget {
         tid: Tid,
         signal: Option<Signal>,
     ) -> Result<(), Self::Error> {
+        info!("SET CONTINUE");
         self.resume_actions
             .lock()
             .push((tid.get(), ResumeAction::Continue));
 
         Ok(())
     }
-}
 
-pub fn handle_interrupt(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
-    disable_int_nested();
-    let rip_after_int3 = frame.instruction_pointer.as_u64();
-    let bp_addr = rip_after_int3 - 1;
-
-    let tid = scheduler().current_thread().id();
-    let mut state = GDB_DEBUG_STATE.lock();
-
-    if state.ctrlc_pending {
-        state.ctrlc_pending = false;
-        state.event = Some(DebugEvent::CtrlC);
-        info!("GDB CTRL-C at RIP={:#x}---------------------------------------------------------------------------------------------------------------", rip_after_int3);
-        return;
+    #[inline(always)]
+    fn support_single_step(&mut self) -> Option<MultiThreadSingleStepOps<'_, Self>> {
+        Some(self)
     }
 
-    state.event = Some(DebugEvent::SwBreakpoint {
-        tid,
-        addr: bp_addr,
-    });
+    #[inline(always)]
+    fn support_scheduler_locking(
+    &mut self,
+    ) -> Option<MultiThreadSchedulerLockingOps<'_, Self>> {
+        Some(self)
+    }
+}
 
-    info!("BREAKPOINT AT {:#x}", bp_addr);
+impl MultiThreadSingleStep for GdbStubTarget {
+    fn set_resume_action_step(
+        &mut self,
+        tid: Tid,
+        signal: Option<Signal>,
+    ) -> Result<(), Self::Error> {
+        self.resume_actions
+            .lock()
+            .push((tid.get(), ResumeAction::SingleStep));
+
+            Ok(())
+    }
+}
+
+impl MultiThreadSchedulerLocking for GdbStubTarget {
+    fn set_resume_action_scheduler_lock(
+        &mut self
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+pub fn handle_interrupt(frame: &mut InterruptStackFrame, index: u8, error: Option<u64>) {
+    info!("ENTER INT3 HANDLER index={} rip={:#x}", index, frame.instruction_pointer.as_u64());
+    if index == 1 {
+        info!("EXCEPTION INDEX = 1");
+        return handle_debug_exception(frame);
+    }
+    let current = scheduler()
+    .try_get_current_thread()
+    .expect("INT3 without current thread");
+
+    if current.state() == ThreadState::Exited {
+        panic!(
+            "INT3 in exited current thread tid={} rip={:#x}",
+            current.id(),
+            frame.instruction_pointer.as_u64()
+        );
+    }
+    disable_int_nested();
+    let (gdb_stub_tid, was_stepping, ctrlc_pending, event, breakpoints, step_over) = {
+        let mut state = GDB_DEBUG_STATE.lock();
+        let vals = (
+            state.gdb_stub_tid.unwrap(),
+            state.stepping,
+            state.ctrlc_pending,
+            state.event.clone(),
+            state.breakpoints.clone(),
+            state.stepping_over.clone(),
+        );
+        state.ctrlc_pending = false;
+        vals
+    };
+
+    let rip_after_int3 = frame.instruction_pointer.as_u64();
+    let bp_addr = rip_after_int3 - 1;
+    let Some(index) = breakpoints.iter().position(|bp| bp.address == bp_addr) else {
+        return;
+    };
+    let inst = breakpoints[index].instruction;
+
+    unsafe {
+        let mut frame_mut = frame.as_mut();
+        frame_mut.update(|f| f.instruction_pointer = VirtAddr::new(bp_addr));
+    }
+
+    let tid = scheduler().try_get_current_thread().expect("FAILED TO GET CURRENT THREAD").id();
+    let ids = scheduler().active_thread_ids();
+
+    {
+        let mut state = GDB_DEBUG_STATE.lock();
+
+        state.event = if ctrlc_pending {
+            Some(DebugEvent::CtrlC)
+        } else {
+            info!("SETTING BP EVENT");
+
+            state.stopped_at_sw_break = Some((tid, bp_addr));
+            state.stopped_tid = Some(tid);
+            state.stopped_rip = Some(bp_addr);
+            info!(
+                "INT3 storing frame ptr={:#x} rip={:#x}",
+                frame as *mut InterruptStackFrame as usize,
+                frame.instruction_pointer.as_u64()
+            );
+
+            Some(DebugEvent::SwBreakpoint {
+                tid,
+                addr: bp_addr,
+            })
+        };
+    }
+
+    let gdb_alive = scheduler()
+    .thread(gdb_stub_tid)
+    .map(|t| t.state() != ThreadState::Exited)
+    .unwrap_or(false);
+
+    if !gdb_alive {
+        panic!(
+            "GDB stub thread tid={} is not alive; cannot stop at breakpoint",
+            gdb_stub_tid
+        );
+    }
+
+    let current_before = scheduler().try_get_current_thread().expect("missing current after debug_stop_all");
+    info!("BEFORE STOP ALL: current tid={} state={:?}", current_before.id(), current_before.state());
+    scheduler().debug_stop_all_except(gdb_stub_tid);
+    let current = scheduler().try_get_current_thread().expect("missing current after debug_stop_all");
+    info!("after debug stop all: current tid={} state={:?}", current.id(), current.state());
+    info!("BEFORE RESUME");
+    let resumed = scheduler().debug_resume_thread(gdb_stub_tid);
+    if !resumed {
+        panic!("failed to resume gdb stub thread tid={}", gdb_stub_tid);
+    }
+    info!("BEFORE SWITCH THREAD");
+    scheduler().debug_dump_queues();
+    scheduler().switch_thread_from_interrupt();
+    info!("AFTER SWITCH THREAD");
+
+    return;
+}
+
+fn handle_debug_exception(frame: &mut InterruptStackFrame) {
+    info!("ENTER #DB HANDLER rip={:#x}", frame.instruction_pointer.as_u64());
+
+    unsafe {
+        let mut frame_mut = frame.as_mut();
+        frame_mut.update(|f| {
+            f.cpu_flags.remove(RFlags::TRAP_FLAG);
+        });
+
+        x86_64::registers::rflags::write(
+            x86_64::registers::rflags::read() & !RFlags::TRAP_FLAG
+        );
+    }
+
+    {
+        let mut state = GDB_DEBUG_STATE.lock();
+        state.stepping_over = None;
+    }
+
+    enable_int_nested(true);
+}
+
+fn restore_original_byte(bp_addr: u64) {
+    info!("RESTORE ORIGINAL BYTE addr={:#x}", bp_addr);
+
+    let inst = {
+        let state = GDB_DEBUG_STATE.lock();
+        state
+            .breakpoints
+            .iter()
+            .find(|bp| bp.address == bp_addr)
+            .expect("missing breakpoint metadata")
+            .instruction
+    };
+
+    unsafe {
+        (bp_addr as *mut u8).write_volatile(inst);
+    }
+
+    let after = unsafe { (bp_addr as *const u8).read_volatile() };
+    info!("RESTORE byte after={:#x}", after);
+}
+
+fn restore_breakpoint(bp_addr: u64) {
+    info!("RESTORE BP addr={:#x}", bp_addr);
+    unsafe {
+        (bp_addr as *mut u8).write_volatile(0xcc);
+    }
 }
 
 pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {

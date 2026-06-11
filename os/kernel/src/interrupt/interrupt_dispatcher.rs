@@ -181,14 +181,14 @@ pub fn setup_idt() {
     }
 }
 
-fn handle_exception(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
+fn handle_exception(mut frame: InterruptStackFrame, index: u8, error: Option<u64>) {
     let gdb_enabled = {
         let state = GDB_DEBUG_STATE.lock();
         state.gdbstub_is_initilaized
     };
 
     if gdb_enabled {
-        gdbtarget::handle_interrupt(frame, index, error);
+        gdbtarget::handle_interrupt(&mut frame, index, error);
         return;
     }
 

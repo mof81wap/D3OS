@@ -120,6 +120,23 @@ impl Scheduler {
             .collect()
     }
 
+    pub fn all_thread_ids(&self) -> Vec<usize> {
+        let state = self.get_ready_state();
+        let mut ids = Vec::new();
+
+        if let Some(current) = state.current_thread.as_ref() {
+            ids.push(current.id());
+        }
+
+        ids.extend(state.ready_queue.iter().map(|t| t.id()));
+        drop(state);
+
+        ids.extend(self.sleep_list.lock().iter().map(|entry| entry.0.id()));
+        ids.extend(self.blocked_list.lock().iter().map(|thread| thread.id()));
+
+        ids
+    }
+
     /// Try to return reference to current thread (called from interrupt dispatcher)
     pub fn try_get_current_thread(&self) -> Option<Arc<Thread>> {
         if self.ready_state.is_locked() {
@@ -345,6 +362,14 @@ impl Scheduler {
                 current.set_state(ThreadState::Blocked);
                 let mut block_list = self.blocked_list.lock();
                 block_list.push(current);
+            }
+            else if current.state() == ThreadState::DebugStopped {
+                info!("SCHEDUELR DEBUG STOPPED");
+                let mut block_list = self.blocked_list.lock();
+                block_list.push(current);
+            }
+            else if current.state() == ThreadState::Exited {
+                info!("SCHEDULER dropping exited current tid={}", current.id());
             }
             else {
                current.set_state(ThreadState::Ready);
@@ -644,4 +669,192 @@ impl Scheduler {
         }
     }
 
+    pub fn debug_stop_thread(&self, tid: usize) -> bool {
+        let mut state = self.ready_state.lock();
+
+        if let Some(current) = state.current_thread.as_ref() {
+            if current.id() == tid {
+                current.set_state(ThreadState::DebugStopped);
+                return true;
+            }
+        }
+
+        let Some(thread) = state
+            .ready_queue
+            .iter()
+            .position(|t| t.id() == tid)
+            .and_then(|pos| state.ready_queue.remove(pos))
+        else {
+            return false;
+        };
+
+        thread.set_state(ThreadState::DebugStopped);
+
+        drop(state);
+
+        self.blocked_list.lock().push(thread);
+        true
+    }
+
+    pub fn debug_stop_all_except(&self, keep_tid: usize) {
+        let mut state = self.ready_state.lock();
+        let mut debug_stopped = Vec::new();
+
+        let mut i = 0;
+        while i < state.ready_queue.len() {
+            if state.ready_queue[i].id() == keep_tid {
+                i += 1;
+                continue;
+            }
+
+            if state.ready_queue[i].state() == ThreadState::Exited {
+                i += 1;
+                continue;
+            }
+
+            let thread = state.ready_queue.remove(i).unwrap();
+            thread.set_state(ThreadState::DebugStopped);
+            debug_stopped.push(thread);
+        }
+
+        if let Some(current) = state.current_thread.as_ref() {
+            if current.state() == ThreadState::Exited {
+                panic!("current thread is Exited during INT3, tid={}", current.id());
+            }
+
+            if current.id() != keep_tid {
+                current.set_state(ThreadState::DebugStopped);
+            }
+        }
+
+        drop(state);
+
+        self.blocked_list.lock().extend(debug_stopped);
+    }
+
+    pub fn debug_resume_thread(&self, tid: usize) -> bool {
+        let mut state = self.ready_state.lock();
+
+        if let Some(current) = state.current_thread.as_ref() {
+            if current.id() == tid {
+                current.set_state(ThreadState::Running);
+                return true;
+            }
+        }
+
+        if state.ready_queue.iter().any(|t| t.id() == tid) {
+            return true;
+        }
+
+        drop(state);
+
+        let mut blocked = self.blocked_list.lock();
+
+        let Some(pos) = blocked.iter().position(|t| t.id() == tid) else {
+            return false;
+        };
+
+        let thread = blocked.remove(pos);
+        thread.set_state(ThreadState::Ready);
+        drop(blocked);
+
+        let mut state = self.ready_state.lock();
+
+        if !state.ready_queue.iter().any(|t| t.id() == tid) {
+            state.ready_queue.push_front(thread);
+        }
+
+        true
+    }
+        pub fn debug_resume_all(&self) {
+        let mut blocked = self.blocked_list.lock();
+        let mut resumed = Vec::new();
+
+        let mut i = 0;
+        while i < blocked.len() {
+            if blocked[i].state() == ThreadState::DebugStopped {
+                let thread = blocked.remove(i);
+                thread.set_state(ThreadState::Ready);
+                resumed.push(thread);
+            } else {
+                i += 1;
+            }
+        }
+
+        drop(blocked);
+
+        let mut state = self.ready_state.lock();
+
+        for thread in resumed {
+            state.ready_queue.push_front(thread);
+        }
+
+        if let Some(current) = state.current_thread.as_ref() {
+            if current.state() == ThreadState::DebugStopped {
+                current.set_state(ThreadState::Running);
+            }
+        }
+    }
+
+    pub fn gdb_thread_ids(&self) -> Vec<usize> {
+        let mut ids = Vec::new();
+
+        {
+            let state = self.ready_state.lock();
+
+            if let Some(current) = state.current_thread.as_ref() {
+                if current.state() != ThreadState::Exited {
+                    ids.push(current.id());
+                }
+            }
+
+            for t in state.ready_queue.iter() {
+                if t.state() != ThreadState::Exited {
+                    ids.push(t.id());
+                }
+            }
+        }
+
+        {
+            for t in self.blocked_list.lock().iter() {
+                if t.state() != ThreadState::Exited {
+                    ids.push(t.id());
+                }
+            }
+        }
+
+        {
+            for (t, _) in self.sleep_list.lock().iter() {
+                if t.state() != ThreadState::Exited {
+                    ids.push(t.id());
+                }
+            }
+        }
+
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    pub fn debug_dump_queues(&self) {
+        let state = self.ready_state.lock();
+
+        info!("=== scheduler dump ===");
+
+        if let Some(current) = state.current_thread.as_ref() {
+            info!("current tid={} state={:?}", current.id(), current.state());
+        } else {
+            info!("current = None");
+        }
+
+        for t in state.ready_queue.iter() {
+            info!("ready tid={} state={:?}", t.id(), t.state());
+        }
+
+        drop(state);
+
+        for t in self.blocked_list.lock().iter() {
+            info!("blocked tid={} state={:?}", t.id(), t.state());
+        }
+    }
 }

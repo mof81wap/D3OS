@@ -15,6 +15,7 @@ use gdbstub::target::ext::base::multithread::MultiThreadBase;
 use gdbstub::common::Tid;
 use core::ptr::addr_of_mut;
 use gdbstub::target::ext::breakpoints::{Breakpoints, SwBreakpoint};
+use x86_64::registers::rflags::RFlags;
 
 
 
@@ -67,6 +68,7 @@ fn hex(n: u8) -> u8 {
 }
 
 pub extern "sysv64" fn test_read() {
+    info!("ENTER TEST READ");
     let mut serial = SerialPort::new(Com2, Baud115200, 512);
     let port = Arc::new(serial);
     SerialPort::plugin(port.clone());
@@ -89,22 +91,36 @@ pub extern "sysv64" fn test_read() {
     }*/
 }
 
-pub extern "sysv64" fn debug_thread_context() {
+pub extern "sysv64" fn debug_thread_context_wrapper() {
+    debug_thread_context();
+}
+
+pub extern "sysv64" fn debug_thread_context() -> ! {
+    let tid = scheduler().current_thread().id();
+    info!("THREAD ID={}", tid);
+    info!("ENTERING DEBUG THREAD CONTEXT");
     let thread = Thread::new_kernel_thread(test_read, "a");
+    //scheduler().ready(thread.clone());
     
     let rsp = thread.saved_rsp0();
 
-    let ctx = match thread_context_from_rsp(rsp) {
+    /*let ctx = match thread_context_from_rsp(rsp) {
         Some(ctx) => ctx,
         None => {
             info!("No thread context");
             return;
         }
-    };
+    };*/
 
-    info!("saved rsp={:#x}", ctx.rsp);
+    loop {
+        gdb_break_here();
+        core::hint::spin_loop();
+        scheduler().yield_now();
+    }
 
-    info!("rax={:#x}", ctx.registers[ThreadRegs::Rax as usize]);
+    //info!("saved rsp={:#x}", ctx.rsp);
+
+    /*info!("rax={:#x}", ctx.registers[ThreadRegs::Rax as usize]);
     info!("rbx={:#x}", ctx.registers[ThreadRegs::Rbx as usize]);
     info!("rcx={:#x}", ctx.registers[ThreadRegs::Rcx as usize]);
     info!("rdx={:#x}", ctx.registers[ThreadRegs::Rdx as usize]);
@@ -119,12 +135,32 @@ pub extern "sysv64" fn debug_thread_context() {
     info!("r13={:#x}", ctx.registers[ThreadRegs::R13 as usize]);
     info!("r14={:#x}", ctx.registers[ThreadRegs::R14 as usize]);
     info!("r15={:#x}", ctx.registers[ThreadRegs::R15 as usize]);
-    info!("rflags={:#x}", ctx.registers[ThreadRegs::Rflags as usize]);
+    info!("rflags={:#x}", ctx.registers[ThreadRegs::Rflags as usize]);*/
 
     test_gdb_target_ops();
     test_gdb_write_registers();
     test_gdb_write_addrs();
-    test_sw_breakpoint();
+    //test_sw_breakpoint();
+}
+
+pub fn test_trap_flag_once() {
+    info!("before manual TF test");
+
+    unsafe {
+        x86_64::registers::rflags::write(
+            x86_64::registers::rflags::read() | RFlags::TRAP_FLAG
+        );
+
+        core::arch::asm!("nop", options(nomem, nostack, preserves_flags));
+    }
+
+    info!("after manual TF test");
+}
+
+#[unsafe(no_mangle)]
+#[inline(never)]
+pub extern "C" fn gdb_break_here() {
+    info!("GDB BREAK HERE");
 }
 
 pub fn test_gdb_target_ops() {
@@ -172,6 +208,7 @@ pub fn test_gdb_target_ops() {
 }
 
 pub fn test_gdb_write_registers() {
+    info!("ENTERING WRITE REGS");
     let mut target = GdbStubTarget::new();
     let tid = Tid::new(1).unwrap();
 

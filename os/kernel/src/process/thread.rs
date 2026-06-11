@@ -675,6 +675,7 @@ pub enum ThreadState {
     Blocked,     // blocked
     Sleeping,    // sleeping for some time
     Exited,      // finished, waiting to be reaped
+    DebugStopped,
 }
 
 impl ThreadState {
@@ -687,6 +688,7 @@ impl ThreadState {
             ThreadState::Blocked => 4,
             ThreadState::Sleeping => 5,
             ThreadState::Exited => 6,
+            ThreadState::DebugStopped => 7,
         }
     }
 
@@ -699,6 +701,7 @@ impl ThreadState {
             4 => ThreadState::Blocked,
             5 => ThreadState::Sleeping,
             6 => ThreadState::Exited,
+            7 => ThreadState::DebugStopped,
             _ => ThreadState::Exited, // defensive
         }
     }
