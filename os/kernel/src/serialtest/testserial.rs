@@ -160,6 +160,9 @@ pub fn test_trap_flag_once() {
 #[unsafe(no_mangle)]
 #[inline(never)]
 pub extern "C" fn gdb_break_here() {
+    let x = 1;
+    let y = 2;
+    let z = x + y;
     info!("GDB BREAK HERE");
 }
 

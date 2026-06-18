@@ -11,6 +11,9 @@ pub enum DebugEvent {
         addr: u64,
     },
     CtrlC,
+    SingleStep {
+        tid: usize,
+    },
 }
 
 #[derive(Debug, Clone)]

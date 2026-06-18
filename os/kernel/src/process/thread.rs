@@ -653,7 +653,6 @@ unsafe extern "C" fn thread_switch(current_rsp0: *mut u64, next_rsp0: u64, next_
     "pop r9",
     "pop r8",
     "popf",
-
     "call unlock_scheduler", // force unlock, thread_switch locks Scheduler but returns later
     "ret", // Return to next thread
     CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX = const CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX,

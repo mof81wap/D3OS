@@ -79,6 +79,9 @@ impl BlockingEventLoop for GdbBlockingEventLoop {
                     DebugEvent::CtrlC => {
                         return Ok(Event::TargetStopped(MultiThreadStopReason::Signal(Signal::SIGINT)));
                     }
+                    DebugEvent::SingleStep { tid } => {
+                        return Ok(Event::TargetStopped(MultiThreadStopReason::SignalWithThread{tid: Tid::new(tid).unwrap(), signal: Signal::SIGTRAP,}))
+                    }
                 }
             }
             scheduler().yield_now();

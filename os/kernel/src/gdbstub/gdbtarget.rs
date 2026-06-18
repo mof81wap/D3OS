@@ -362,8 +362,6 @@ impl MultiThreadResume for GdbStubTarget {
             if let Some((tid, addr)) = stopped {
                 info!("resume from SW breakpoint tid={} addr={:#x}", tid, addr);
 
-                restore_original_byte(addr);
-
                 scheduler().debug_resume_thread(tid);
             } else {
                 info!("resume initial/no breakpoint");
@@ -376,24 +374,35 @@ impl MultiThreadResume for GdbStubTarget {
         }
 
         for (tid, action) in actions.iter() {
+            info!("ENTERING ACTIONS");
             let thread = scheduler()
                 .thread(*tid)
                 .ok_or(())?;
 
             let rsp = thread.saved_rsp0();
             let mut ctx = mut_thread_context_from_rsp(rsp).ok_or(())?;
+            info!("RESUME RSP={:#x}, RIP={:#x}", rsp, ctx.registers[ThreadRegs::Rip as usize]);
 
             match action {
                 ResumeAction::Continue => {
                     info!("CONTINUE");
-                    let mut state = GDB_DEBUG_STATE.lock();
-                    state.stepping = false;
-                    state.event = None;
+                    {
+                        let mut state = GDB_DEBUG_STATE.lock();
+                        state.stepping = false;
+                        state.event = None;
+                        state.stopped_at_sw_break = None;
+                        state.stopped_tid = None;
+                        state.stopped_rip = None;
+                    }
                     scheduler().debug_resume_thread(*tid);
                 }
                 ResumeAction::SingleStep => {
+                    info!("ACTION SINGLESTEP");
                     let mut state = GDB_DEBUG_STATE.lock();
                     state.stepping = true;
+                    state.event = None;
+                    //ctx.registers[ThreadRegs::Rflags as usize] |= RFLAGS_TF;
+                    //let rip = state.stopped_rip;
                     scheduler().debug_resume_thread(*tid);
                 }
             }
@@ -403,8 +412,8 @@ impl MultiThreadResume for GdbStubTarget {
             let mut state = GDB_DEBUG_STATE.lock();
             state.event = None;
         }
+        //scheduler().yield_now();
         enable_int_nested(true);
-        scheduler().yield_now();
         info!("EXITING RESUME");
         Ok(())
     }
@@ -464,12 +473,9 @@ impl MultiThreadSchedulerLocking for GdbStubTarget {
     }
 }
 
-pub fn handle_interrupt(frame: &mut InterruptStackFrame, index: u8, error: Option<u64>) {
-    info!("ENTER INT3 HANDLER index={} rip={:#x}", index, frame.instruction_pointer.as_u64());
-    if index == 1 {
-        info!("EXCEPTION INDEX = 1");
-        return handle_debug_exception(frame);
-    }
+pub extern "x86-interrupt" fn gdb_handle_interrupt(mut frame: InterruptStackFrame) {
+    info!("ENTER INT3 HANDLER rip={:#x}", frame.instruction_pointer.as_u64());
+
     let current = scheduler()
     .try_get_current_thread()
     .expect("INT3 without current thread");
@@ -506,6 +512,7 @@ pub fn handle_interrupt(frame: &mut InterruptStackFrame, index: u8, error: Optio
     unsafe {
         let mut frame_mut = frame.as_mut();
         frame_mut.update(|f| f.instruction_pointer = VirtAddr::new(bp_addr));
+        frame_mut.update(|f| f.cpu_flags.insert(RFlags::TRAP_FLAG));
     }
 
     let tid = scheduler().try_get_current_thread().expect("FAILED TO GET CURRENT THREAD").id();
@@ -523,9 +530,10 @@ pub fn handle_interrupt(frame: &mut InterruptStackFrame, index: u8, error: Optio
             state.stopped_tid = Some(tid);
             state.stopped_rip = Some(bp_addr);
             info!(
-                "INT3 storing frame ptr={:#x} rip={:#x}",
-                frame as *mut InterruptStackFrame as usize,
-                frame.instruction_pointer.as_u64()
+                "INT3 storing frame ptr={:#x} rip={:#x} flags={:?}",
+                &mut frame as *mut InterruptStackFrame as usize,
+                frame.instruction_pointer.as_u64(),
+                frame.cpu_flags
             );
 
             Some(DebugEvent::SwBreakpoint {
@@ -547,72 +555,78 @@ pub fn handle_interrupt(frame: &mut InterruptStackFrame, index: u8, error: Optio
         );
     }
 
-    let current_before = scheduler().try_get_current_thread().expect("missing current after debug_stop_all");
-    info!("BEFORE STOP ALL: current tid={} state={:?}", current_before.id(), current_before.state());
-    scheduler().debug_stop_all_except(gdb_stub_tid);
-    let current = scheduler().try_get_current_thread().expect("missing current after debug_stop_all");
-    info!("after debug stop all: current tid={} state={:?}", current.id(), current.state());
-    info!("BEFORE RESUME");
-    let resumed = scheduler().debug_resume_thread(gdb_stub_tid);
-    if !resumed {
-        panic!("failed to resume gdb stub thread tid={}", gdb_stub_tid);
+    {
+        let current_before = scheduler().try_get_current_thread().expect("missing current after debug_stop_all");
+        info!("BEFORE STOP ALL: current tid={} state={:?}", current_before.id(), current_before.state());
+        scheduler().debug_stop_all_except(gdb_stub_tid);
+        let current = scheduler().try_get_current_thread().expect("missing current after debug_stop_all");
+        info!("after debug stop all: current tid={} state={:?}", current.id(), current.state());
+        info!("BEFORE RESUME");
+        let resumed = scheduler().debug_resume_thread(gdb_stub_tid);
+        if !resumed {
+            panic!("failed to resume gdb stub thread tid={}", gdb_stub_tid);
+        }
+        info!("BEFORE SWITCH THREAD");
+    
+        scheduler().debug_dump_queues();
     }
-    info!("BEFORE SWITCH THREAD");
-    scheduler().debug_dump_queues();
     scheduler().switch_thread_from_interrupt();
     info!("AFTER SWITCH THREAD");
 
     return;
 }
 
-fn handle_debug_exception(frame: &mut InterruptStackFrame) {
+pub extern "x86-interrupt" fn gdb_handle_debug_exception(mut frame: InterruptStackFrame) {
     info!("ENTER #DB HANDLER rip={:#x}", frame.instruction_pointer.as_u64());
 
-    unsafe {
-        let mut frame_mut = frame.as_mut();
-        frame_mut.update(|f| {
-            f.cpu_flags.remove(RFlags::TRAP_FLAG);
-        });
+    disable_int_nested();
+    
 
-        x86_64::registers::rflags::write(
-            x86_64::registers::rflags::read() & !RFlags::TRAP_FLAG
-        );
-    }
-
-    {
-        let mut state = GDB_DEBUG_STATE.lock();
-        state.stepping_over = None;
-    }
-
-    enable_int_nested(true);
-}
-
-fn restore_original_byte(bp_addr: u64) {
-    info!("RESTORE ORIGINAL BYTE addr={:#x}", bp_addr);
-
-    let inst = {
-        let state = GDB_DEBUG_STATE.lock();
-        state
-            .breakpoints
-            .iter()
-            .find(|bp| bp.address == bp_addr)
-            .expect("missing breakpoint metadata")
-            .instruction
+    let stepping = {
+        GDB_DEBUG_STATE.lock().stepping
     };
 
-    unsafe {
-        (bp_addr as *mut u8).write_volatile(inst);
+    if !stepping {
+        unsafe {
+            let mut frame_mut = frame.as_mut();
+            frame_mut.update(|f| {
+                f.cpu_flags.remove(RFlags::TRAP_FLAG);
+            });
+        }
+        return;
     }
 
-    let after = unsafe { (bp_addr as *const u8).read_volatile() };
-    info!("RESTORE byte after={:#x}", after);
-}
+    let thread = scheduler()
+        .try_get_current_thread()
+        .expect("#DB without current thread");
+    let tid = thread.id();
 
-fn restore_breakpoint(bp_addr: u64) {
-    info!("RESTORE BP addr={:#x}", bp_addr);
-    unsafe {
-        (bp_addr as *mut u8).write_volatile(0xcc);
+
+    let db_rip = frame.instruction_pointer.as_u64();
+    info!("#DB RIP={:#x}", db_rip);
+
+    let gdb_stub_tid = {
+        let mut state = GDB_DEBUG_STATE.lock();
+
+        state.stepping = false;
+        //state.stopped_tid = Some(tid);
+        state.stopped_rip = Some(db_rip);
+        state.event = Some(DebugEvent::SingleStep{tid});
+        info!("#DB AFTER SET EVENT");
+
+        state.gdb_stub_tid.unwrap()
+    };
+
+    {
+        scheduler().debug_stop_thread(tid);
     }
+
+    if !scheduler().debug_resume_thread(gdb_stub_tid) {
+        panic!("failed to resume gdb stub thread tid={}", gdb_stub_tid);
+    }
+
+    info!("#DB BEFORE SWITCH");
+    scheduler().switch_thread_from_interrupt();
 }
 
 pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {
