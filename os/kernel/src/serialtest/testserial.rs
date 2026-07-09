@@ -16,6 +16,7 @@ use gdbstub::common::Tid;
 use core::ptr::addr_of_mut;
 use gdbstub::target::ext::breakpoints::{Breakpoints, SwBreakpoint};
 use x86_64::registers::rflags::RFlags;
+use x86_64::registers::debug::{Dr0, Dr1, Dr2, Dr3, Dr7, DebugAddressRegister, Dr7Flags, Dr7Value};
 
 
 
@@ -163,6 +164,7 @@ pub extern "C" fn gdb_break_here() {
     let x = 1;
     let y = 2;
     hex(32);
+    info!("GDB BREAK HERE DR7={:?}", Dr7::read());
     let z = x + y;
     info!("GDB BREAK HERE");
 }

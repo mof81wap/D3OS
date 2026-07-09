@@ -8,8 +8,8 @@ use gdbstub::common::{Tid};
 use gdbstub::arch::Arch;
 use crate::{scheduler, process_manager};
 use x86_64::VirtAddr;
-use gdbstub::target::ext::breakpoints::{Breakpoints, SwBreakpoint};
-use gdbstub::target::ext::breakpoints::{BreakpointsOps, SwBreakpointOps};
+use gdbstub::target::ext::breakpoints::{Breakpoints, SwBreakpoint, HwBreakpoint};
+use gdbstub::target::ext::breakpoints::{BreakpointsOps, SwBreakpointOps, HwBreakpointOps};
 use crate::process::process::Process;
 use alloc::sync::Arc;
 use log::info;
@@ -26,6 +26,7 @@ use gdbstub::common::Signal;
 use x86_64::registers::control::{Cr0, Cr3};
 use x86_64::structures::paging::page::{PageRange, Size4KiB, Page};
 use x86_64::structures::paging::PageTableFlags;
+use x86_64::registers::debug::{Dr0, Dr1, Dr2, Dr3, Dr6, Dr7, DebugAddressRegister, Dr7Flags, Dr7Value, Dr6Flags};
 
 
 pub struct GdbStubTarget {
@@ -51,6 +52,11 @@ pub struct GdbSwBreakpoint {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct GdbHwBreakpoint {
+    pub address: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
 enum ResumeAction {
     Continue,
     SingleStep,
@@ -62,25 +68,25 @@ const RFLAGS_TF: u64 = 0x100;
 #[repr(u64)]
 #[derive(Clone, Copy, Debug)]
 pub enum ThreadRegs {
-    Gsbase = 0,
-    Fsbase = 1,
-    Rbp = 2,
-    Rdi = 3,
-    Rsi = 4,
-    Rdx = 5,
-    Rcx = 6,
-    Rbx = 7,
-    Rax = 8,
-    R15 = 9,
-    R14 = 10,
-    R13 = 11,
-    R12 = 12,
-    R11 = 13,
-    R10 = 14,
-    R9 = 15,
-    R8 = 16,
-    Rflags = 17,
-    Rip = 18,
+    Gsbase, 
+    Fsbase, 
+    Rbp, 
+    Rdi, 
+    Rsi, 
+    Rdx, 
+    Rcx, 
+    Rbx, 
+    Rax, 
+    R15,
+    R14, 
+    R13, 
+    R12, 
+    R11, 
+    R10, 
+    R9, 
+    R8,
+    Rflags,
+    Rip,
 }
 
 #[repr(C)]
@@ -370,6 +376,11 @@ impl Breakpoints for GdbStubTarget {
     fn support_sw_breakpoint(&mut self) -> Option<SwBreakpointOps<Self>> {
         Some(self)
     }
+
+    #[inline(always)]
+    fn support_hw_breakpoint(&mut self) -> Option<HwBreakpointOps<Self>> {
+        Some(self)
+    }
 }
 
 impl SwBreakpoint for GdbStubTarget {
@@ -432,12 +443,12 @@ impl MultiThreadResume for GdbStubTarget {
             GDB_DEBUG_STATE.lock().stopped_at_sw_break
         };
 
-        if sw_break.is_none() {
+        /*if sw_break.is_none() {
             scheduler().debug_resume_all();
             enable_int_nested(true);
             scheduler().yield_now();
             return Ok(());
-        }
+        }*/
 
         if actions.is_empty() {
 
@@ -564,6 +575,100 @@ impl MultiThreadSchedulerLocking for GdbStubTarget {
     }
 }
 
+impl HwBreakpoint for GdbStubTarget {
+    fn add_hw_breakpoint(
+        &mut self,
+        addr: <Self::Arch as Arch>::Usize,
+        kind: <Self::Arch as Arch>::BreakpointKind,
+    ) -> TargetResult<bool, Self> {
+        let virt_addr = addr as u64;
+
+        {
+            let mut state = GDB_DEBUG_STATE.lock();
+            if state.hwbreakpoints.iter().any(|bp| bp.address == virt_addr) {
+                return Ok(true);
+            }
+
+            let Some(index) = state.hwbreakpoints.iter().position(|bp| bp.address == 0)
+            else {
+                return Ok(false);
+            };
+
+            state.hwbreakpoints[index].address = virt_addr;
+            let mut dr7 = Dr7::read();
+            info!("DR7={:?}", dr7);
+
+            match index {
+                0 => {
+                    Dr0::write(virt_addr);
+                    dr7.insert_flags(Dr7Flags::GLOBAL_BREAKPOINT_0_ENABLE);
+                    Dr7::write(dr7);
+                },
+                1 => {
+                    Dr1::write(virt_addr);
+                    dr7.insert_flags(Dr7Flags::GLOBAL_BREAKPOINT_1_ENABLE);
+                    Dr7::write(dr7);
+                },
+                2 => {
+                    Dr2::write(virt_addr);
+                    dr7.insert_flags(Dr7Flags::GLOBAL_BREAKPOINT_2_ENABLE);
+                    Dr7::write(dr7);
+                },
+                3 => {
+                    Dr3::write(virt_addr);
+                    dr7.insert_flags(Dr7Flags::GLOBAL_BREAKPOINT_3_ENABLE);
+                    Dr7::write(dr7);
+                },
+                _ => {},
+            }
+        }
+        info!("DR7={:?}", Dr7::read());
+        Ok(true)
+    }
+
+    fn remove_hw_breakpoint(
+        &mut self,
+        addr: <Self::Arch as Arch>::Usize,
+        kind: <Self::Arch as Arch>::BreakpointKind,
+    ) -> TargetResult<bool, Self> {
+        let virt_addr = addr as u64;
+
+        {
+            let mut state = GDB_DEBUG_STATE.lock();
+            if let Some(index) = state.hwbreakpoints.iter().position(|bp| bp.address == virt_addr) {
+                state.hwbreakpoints[index].address = 0;
+                let mut dr7 = Dr7::read();
+                match index {
+                    0 => {
+                        Dr0::write(virt_addr);
+                        dr7.remove_flags(Dr7Flags::GLOBAL_BREAKPOINT_0_ENABLE);
+                        Dr7::write(dr7);
+                    },
+                    1 => {
+                        Dr1::write(virt_addr);
+                        dr7.remove_flags(Dr7Flags::GLOBAL_BREAKPOINT_1_ENABLE);
+                        Dr7::write(dr7);
+                    },
+                    2 => {
+                        Dr2::write(virt_addr);
+                        dr7.remove_flags(Dr7Flags::GLOBAL_BREAKPOINT_2_ENABLE);
+                        Dr7::write(dr7);
+                    },
+                    3 => {
+                        Dr3::write(virt_addr);
+                        dr7.remove_flags(Dr7Flags::GLOBAL_BREAKPOINT_3_ENABLE);
+                        Dr7::write(dr7);
+                    },
+                    _ => {},
+                }
+                return Ok(true);
+            } else {
+                return Ok(false);
+            }
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn gdb_interrupt_handler(frame: *mut GdbTrapFrame, index: u64) {
     let frame = unsafe { &mut *frame };
@@ -610,6 +715,13 @@ fn gdb_handle_int3(frame: &mut GdbTrapFrame) {
 fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
     disable_int_nested();
     let rip = frame.rip;
+    let dr6 = Dr6::read();
+    let hit_hw_bp = dr6.intersects(
+        Dr6Flags::TRAP0 |
+        Dr6Flags::TRAP1 |
+        Dr6Flags::TRAP2 |
+        Dr6Flags::TRAP3
+    );
     
     let stepping = {
         GDB_DEBUG_STATE.lock().stepping
@@ -617,7 +729,7 @@ fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
 
     frame.rflags &= !RFLAGS_TF;
 
-    if !stepping {
+    if !stepping && !hit_hw_bp {
         return;
     }
 
@@ -636,7 +748,11 @@ fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
         //state.stopped_at_sw_break = None;
         state.stopped_tid = Some(tid);
         state.stopped_rip = Some(rip);
-        state.event = Some(DebugEvent::SingleStep { tid });
+        if hit_hw_bp {
+            state.event = Some(DebugEvent::HwBreakpoint{ tid });
+        } else {
+            state.event = Some(DebugEvent::SingleStep { tid });
+        }
         state.gdb_stub_tid.unwrap()
     };
 

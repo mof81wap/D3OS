@@ -1,5 +1,5 @@
 use spin::Mutex;
-use crate::gdbstub::gdbtarget::{GdbSwBreakpoint, ThreadContextMut};
+use crate::gdbstub::gdbtarget::{GdbSwBreakpoint, ThreadContextMut, GdbHwBreakpoint};
 use alloc::vec::Vec;
 use x86_64::structures::idt::InterruptStackFrame;
 use x86_64::VirtAddr;
@@ -14,6 +14,9 @@ pub enum DebugEvent {
     SingleStep {
         tid: usize,
     },
+    HwBreakpoint {
+        tid: usize,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +38,7 @@ pub struct DebugState {
     pub stepping_over: Option<StepOver>,
     pub stopped_tid: Option<usize>,
     pub stopped_rip: Option<u64>,
+    pub hwbreakpoints: [GdbHwBreakpoint; 4],
 }
 
 pub static GDB_DEBUG_STATE: Mutex<DebugState> = Mutex::new(DebugState {
@@ -48,4 +52,5 @@ pub static GDB_DEBUG_STATE: Mutex<DebugState> = Mutex::new(DebugState {
     stepping_over: None,
     stopped_tid: None,
     stopped_rip: None,
+    hwbreakpoints: [GdbHwBreakpoint{address: 0}; 4],
 });
