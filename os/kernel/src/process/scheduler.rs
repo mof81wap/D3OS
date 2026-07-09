@@ -364,12 +364,10 @@ impl Scheduler {
                 block_list.push(current);
             }
             else if current.state() == ThreadState::DebugStopped {
-                info!("SCHEDUELR DEBUG STOPPED");
                 let mut block_list = self.blocked_list.lock();
                 block_list.push(current);
             }
             else if current.state() == ThreadState::Exited {
-                info!("SCHEDULER dropping exited current tid={}", current.id());
             }
             else {
                current.set_state(ThreadState::Ready);

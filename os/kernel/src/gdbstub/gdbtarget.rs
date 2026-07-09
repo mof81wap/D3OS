@@ -23,6 +23,9 @@ use gdbstub::stub::MultiThreadStopReason;
 use crate::device::cpu::{disable_int_nested, enable_int_nested};
 use crate::process::thread::ThreadState;
 use gdbstub::common::Signal;
+use x86_64::registers::control::{Cr0, Cr3};
+use x86_64::structures::paging::page::{PageRange, Size4KiB, Page};
+use x86_64::structures::paging::PageTableFlags;
 
 
 pub struct GdbStubTarget {
@@ -120,6 +123,64 @@ impl From<ThreadContext> for X86_64CoreRegs {
     }
 }
 
+#[repr(C)]
+#[derive(Debug)]
+pub struct GdbTrapFrame {
+    pub rax: u64,
+    pub rbx: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rbp: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
+}
+
+fn regs_from_trap_frame(frame: &GdbTrapFrame) -> X86_64CoreRegs {
+    let mut regs = X86_64CoreRegs::default();
+
+    regs.regs[0] = frame.rax;
+    regs.regs[1] = frame.rbx;
+    regs.regs[2] = frame.rcx;
+    regs.regs[3] = frame.rdx;
+    regs.regs[4] = frame.rsi;
+    regs.regs[5] = frame.rdi;
+    regs.regs[6] = frame.rbp;
+    regs.regs[7] = frame.rsp;
+
+    regs.regs[8] = frame.r8;
+    regs.regs[9] = frame.r9;
+    regs.regs[10] = frame.r10;
+    regs.regs[11] = frame.r11;
+    regs.regs[12] = frame.r12;
+    regs.regs[13] = frame.r13;
+    regs.regs[14] = frame.r14;
+    regs.regs[15] = frame.r15;
+
+    regs.rip = frame.rip;
+    regs.eflags = frame.rflags as u32;
+
+    regs
+}
+
+unsafe extern "C" {
+    pub fn gdb_breakpoint_entry();
+    pub fn gdb_debug_entry();
+}
+
 impl Target for GdbStubTarget {
     type Error = ();
     type Arch = X86_64_SSE;
@@ -145,7 +206,13 @@ impl MultiThreadBase for GdbStubTarget {
         let thread = scheduler()
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
-        info!("gdb tid={} -> thread.id={} saved_rsp0={:#x}", raw_tid, thread.id(), thread.saved_rsp0().as_u64());
+
+        if let Some(ptr) = thread.debug_trap_frame() {
+            let frame = unsafe { ptr.as_ref() };
+            *regs = regs_from_trap_frame(frame);
+
+            return Ok(());
+        }
 
         let rsp0 = thread.saved_rsp0();
         let ctx = thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
@@ -163,7 +230,6 @@ impl MultiThreadBase for GdbStubTarget {
         if let Some(rip) = stopped_rip {
             regs.rip = rip;
         }
-        info!("READ_REGS tid={} rip={:#x} eflags={:#x}", tid.get(), regs.rip, regs.eflags);
 
         Ok(())
     }
@@ -176,6 +242,32 @@ impl MultiThreadBase for GdbStubTarget {
         let thread = scheduler()
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
+
+        if let Some(ptr) = thread.debug_trap_frame() {
+            let frame = unsafe { &mut *ptr.as_ptr() };
+
+            frame.rax = regs.regs[0];
+            frame.rbx = regs.regs[1];
+            frame.rcx = regs.regs[2];
+            frame.rdx = regs.regs[3];
+            frame.rsi = regs.regs[4];
+            frame.rdi = regs.regs[5];
+            frame.rbp = regs.regs[6];
+            frame.rsp = regs.regs[7];
+            frame.r8 = regs.regs[8];
+            frame.r9 = regs.regs[9];
+            frame.r10 = regs.regs[10];
+            frame.r11 = regs.regs[11];
+            frame.r12 = regs.regs[12];
+            frame.r13 = regs.regs[13];
+            frame.r14 = regs.regs[14];
+            frame.r15 = regs.regs[15];
+
+            frame.rip = regs.rip;
+            frame.rflags = regs.eflags as u64;
+
+            return Ok(());
+        } 
         
         let rsp0 = thread.saved_rsp0();
         let mut ctx = mut_thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
@@ -220,7 +312,7 @@ impl MultiThreadBase for GdbStubTarget {
                             .get_phys(virt_addr)
                             .ok_or(TargetError::NonFatal)?;
 
-            unsafe { *byte = *(phys_addr.as_u64() as *const u8); }
+            unsafe { *byte = (virt_addr as *const u8).read(); }
         }
 
         Ok(data.len())
@@ -251,6 +343,8 @@ impl MultiThreadBase for GdbStubTarget {
 
         Ok(())
     }
+
+    #[inline(always)]
     fn list_active_threads(
         &mut self,
         thread_is_active: &mut dyn FnMut(Tid)
@@ -295,10 +389,7 @@ impl SwBreakpoint for GdbStubTarget {
         }
 
         let instruction = unsafe { virt_addr_ptr.read_volatile() };
-
-        unsafe { info!("OP CODE AT BREAKPOINT={:#x}", virt_addr_ptr.read_volatile()) };
         unsafe { virt_addr_ptr.write_volatile(0xCC) };
-        unsafe { info!("OP CODE AT BREAKPOINT={:#x}", virt_addr_ptr.read_volatile()) };
 
         {
             let mut state = GDB_DEBUG_STATE.lock();
@@ -334,7 +425,6 @@ impl SwBreakpoint for GdbStubTarget {
 impl MultiThreadResume for GdbStubTarget {
 
     fn resume(&mut self) -> Result<(), Self::Error> {
-        info!("ENTERING RESUME");
         let actions = self.resume_actions.lock()
                                         .clone();
 
@@ -343,7 +433,6 @@ impl MultiThreadResume for GdbStubTarget {
         };
 
         if sw_break.is_none() {
-            info!("RESUME, no stopped breakpoint");
             scheduler().debug_resume_all();
             enable_int_nested(true);
             scheduler().yield_now();
@@ -351,41 +440,34 @@ impl MultiThreadResume for GdbStubTarget {
         }
 
         if actions.is_empty() {
-            info!("DEFAULT RESUME");
 
             let stopped = {
                 let mut state = GDB_DEBUG_STATE.lock();
                 state.stepping = false;
+                state.event = None;
+                state.stopped_rip = None;
+                state.stopped_tid = None;
                 state.stopped_at_sw_break.take()
             };
 
             if let Some((tid, addr)) = stopped {
-                info!("resume from SW breakpoint tid={} addr={:#x}", tid, addr);
-
                 scheduler().debug_resume_thread(tid);
-            } else {
-                info!("resume initial/no breakpoint");
                 scheduler().debug_resume_all();
+            } else {
+                scheduler().debug_resume_all();
+
+                for i in 1..10 {
+                    scheduler().debug_resume_thread(i);
+                }
             }
 
             enable_int_nested(true);
-            scheduler().yield_now();
             return Ok(());
         }
 
         for (tid, action) in actions.iter() {
-            info!("ENTERING ACTIONS");
-            let thread = scheduler()
-                .thread(*tid)
-                .ok_or(())?;
-
-            let rsp = thread.saved_rsp0();
-            let mut ctx = mut_thread_context_from_rsp(rsp).ok_or(())?;
-            info!("RESUME RSP={:#x}, RIP={:#x}", rsp, ctx.registers[ThreadRegs::Rip as usize]);
-
             match action {
                 ResumeAction::Continue => {
-                    info!("CONTINUE");
                     {
                         let mut state = GDB_DEBUG_STATE.lock();
                         state.stepping = false;
@@ -397,13 +479,26 @@ impl MultiThreadResume for GdbStubTarget {
                     scheduler().debug_resume_thread(*tid);
                 }
                 ResumeAction::SingleStep => {
-                    info!("ACTION SINGLESTEP");
-                    let mut state = GDB_DEBUG_STATE.lock();
-                    state.stepping = true;
-                    state.event = None;
-                    //ctx.registers[ThreadRegs::Rflags as usize] |= RFLAGS_TF;
-                    //let rip = state.stopped_rip;
+                    let thread = scheduler()
+                            .thread(*tid)
+                            .ok_or(())?;
+                    {
+                        let mut state = GDB_DEBUG_STATE.lock();
+                        state.stepping = true;
+                        state.event = None;
+                    }
+
+                    if let Some(ptr) = thread.debug_trap_frame() {
+                        let frame = unsafe { &mut *ptr.as_ptr() };
+                        frame.rflags |= RFLAGS_TF;
+                    } else {
+                        let rsp = thread.saved_rsp0();
+                        let mut ctx = mut_thread_context_from_rsp(rsp).ok_or(())?;
+                        ctx.registers[ThreadRegs::Rflags as usize] |= RFLAGS_TF;
+                    }
+
                     scheduler().debug_resume_thread(*tid);
+                    return Ok(());
                 }
             }
         }
@@ -412,16 +507,14 @@ impl MultiThreadResume for GdbStubTarget {
             let mut state = GDB_DEBUG_STATE.lock();
             state.event = None;
         }
-        //scheduler().yield_now();
         enable_int_nested(true);
-        info!("EXITING RESUME");
         Ok(())
     }
 
     fn clear_resume_actions(&mut self) -> Result<(), Self::Error> {
-        self.resume_actions.lock().clear();
-        info!("CLEAR RESUME ACTIONS");
-        
+        self.resume_actions
+            .lock()
+            .clear(); 
         Ok(())
     }
 
@@ -430,11 +523,9 @@ impl MultiThreadResume for GdbStubTarget {
         tid: Tid,
         signal: Option<Signal>,
     ) -> Result<(), Self::Error> {
-        info!("SET CONTINUE");
         self.resume_actions
             .lock()
             .push((tid.get(), ResumeAction::Continue));
-
         Ok(())
     }
 
@@ -473,159 +564,87 @@ impl MultiThreadSchedulerLocking for GdbStubTarget {
     }
 }
 
-pub extern "x86-interrupt" fn gdb_handle_interrupt(mut frame: InterruptStackFrame) {
-    info!("ENTER INT3 HANDLER rip={:#x}", frame.instruction_pointer.as_u64());
+#[unsafe(no_mangle)]
+pub extern "C" fn gdb_interrupt_handler(frame: *mut GdbTrapFrame, index: u64) {
+    let frame = unsafe { &mut *frame };
 
-    let current = scheduler()
-    .try_get_current_thread()
-    .expect("INT3 without current thread");
-
-    if current.state() == ThreadState::Exited {
-        panic!(
-            "INT3 in exited current thread tid={} rip={:#x}",
-            current.id(),
-            frame.instruction_pointer.as_u64()
-        );
+    match index {
+        1 => gdb_handle_debug_exception(frame),
+        3 => gdb_handle_int3(frame),
+        _ => panic!("unexpected gdb trap index {}", index),
     }
-    disable_int_nested();
-    let (gdb_stub_tid, was_stepping, ctrlc_pending, event, breakpoints, step_over) = {
-        let mut state = GDB_DEBUG_STATE.lock();
-        let vals = (
-            state.gdb_stub_tid.unwrap(),
-            state.stepping,
-            state.ctrlc_pending,
-            state.event.clone(),
-            state.breakpoints.clone(),
-            state.stepping_over.clone(),
-        );
-        state.ctrlc_pending = false;
-        vals
-    };
-
-    let rip_after_int3 = frame.instruction_pointer.as_u64();
-    let bp_addr = rip_after_int3 - 1;
-    let Some(index) = breakpoints.iter().position(|bp| bp.address == bp_addr) else {
-        return;
-    };
-    let inst = breakpoints[index].instruction;
-
-    unsafe {
-        let mut frame_mut = frame.as_mut();
-        frame_mut.update(|f| f.instruction_pointer = VirtAddr::new(bp_addr));
-        frame_mut.update(|f| f.cpu_flags.insert(RFlags::TRAP_FLAG));
-    }
-
-    let tid = scheduler().try_get_current_thread().expect("FAILED TO GET CURRENT THREAD").id();
-    let ids = scheduler().active_thread_ids();
-
-    {
-        let mut state = GDB_DEBUG_STATE.lock();
-
-        state.event = if ctrlc_pending {
-            Some(DebugEvent::CtrlC)
-        } else {
-            info!("SETTING BP EVENT");
-
-            state.stopped_at_sw_break = Some((tid, bp_addr));
-            state.stopped_tid = Some(tid);
-            state.stopped_rip = Some(bp_addr);
-            info!(
-                "INT3 storing frame ptr={:#x} rip={:#x} flags={:?}",
-                &mut frame as *mut InterruptStackFrame as usize,
-                frame.instruction_pointer.as_u64(),
-                frame.cpu_flags
-            );
-
-            Some(DebugEvent::SwBreakpoint {
-                tid,
-                addr: bp_addr,
-            })
-        };
-    }
-
-    let gdb_alive = scheduler()
-    .thread(gdb_stub_tid)
-    .map(|t| t.state() != ThreadState::Exited)
-    .unwrap_or(false);
-
-    if !gdb_alive {
-        panic!(
-            "GDB stub thread tid={} is not alive; cannot stop at breakpoint",
-            gdb_stub_tid
-        );
-    }
-
-    {
-        let current_before = scheduler().try_get_current_thread().expect("missing current after debug_stop_all");
-        info!("BEFORE STOP ALL: current tid={} state={:?}", current_before.id(), current_before.state());
-        scheduler().debug_stop_all_except(gdb_stub_tid);
-        let current = scheduler().try_get_current_thread().expect("missing current after debug_stop_all");
-        info!("after debug stop all: current tid={} state={:?}", current.id(), current.state());
-        info!("BEFORE RESUME");
-        let resumed = scheduler().debug_resume_thread(gdb_stub_tid);
-        if !resumed {
-            panic!("failed to resume gdb stub thread tid={}", gdb_stub_tid);
-        }
-        info!("BEFORE SWITCH THREAD");
-    
-        scheduler().debug_dump_queues();
-    }
-    scheduler().switch_thread_from_interrupt();
-    info!("AFTER SWITCH THREAD");
-
-    return;
 }
 
-pub extern "x86-interrupt" fn gdb_handle_debug_exception(mut frame: InterruptStackFrame) {
-    info!("ENTER #DB HANDLER rip={:#x}", frame.instruction_pointer.as_u64());
-
+fn gdb_handle_int3(frame: &mut GdbTrapFrame) {
     disable_int_nested();
-    
 
+    let bp_addr = frame.rip - 1;
+    frame.rip = bp_addr;
+    frame.rflags &= !RFLAGS_TF;
+
+    let thread = scheduler()
+        .try_get_current_thread()
+        .expect("FAILED TO GET CURRENT THREAD");
+    
+    let tid = thread.id();
+    thread.set_debug_trap_frame(frame as *mut GdbTrapFrame as u64);
+
+    let gdb_stub_tid = {
+        let mut state = GDB_DEBUG_STATE.lock();
+        state.stopped_at_sw_break = Some((tid, bp_addr));
+        state.stopped_tid = Some(tid);
+        state.stopped_rip = Some(bp_addr);
+
+        state.event = Some(DebugEvent::SwBreakpoint {
+            tid,
+            addr: bp_addr,
+        });
+        state.gdb_stub_tid.unwrap()
+    };
+
+    scheduler().debug_stop_all_except(gdb_stub_tid);
+    scheduler().debug_resume_thread(gdb_stub_tid);
+    scheduler().switch_thread_from_interrupt();
+}
+
+fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
+    disable_int_nested();
+    let rip = frame.rip;
+    
     let stepping = {
         GDB_DEBUG_STATE.lock().stepping
     };
 
+    frame.rflags &= !RFLAGS_TF;
+
     if !stepping {
-        unsafe {
-            let mut frame_mut = frame.as_mut();
-            frame_mut.update(|f| {
-                f.cpu_flags.remove(RFlags::TRAP_FLAG);
-            });
-        }
         return;
     }
 
     let thread = scheduler()
         .try_get_current_thread()
-        .expect("#DB without current thread");
+        .expect("FAILED TO GET CURRENT THREAD");
+
     let tid = thread.id();
-
-
-    let db_rip = frame.instruction_pointer.as_u64();
-    info!("#DB RIP={:#x}", db_rip);
+    thread.set_debug_trap_frame(frame as *mut GdbTrapFrame as u64);
 
     let gdb_stub_tid = {
         let mut state = GDB_DEBUG_STATE.lock();
 
         state.stepping = false;
-        //state.stopped_tid = Some(tid);
-        state.stopped_rip = Some(db_rip);
-        state.event = Some(DebugEvent::SingleStep{tid});
-        info!("#DB AFTER SET EVENT");
-
+        state.stepping_over = None;
+        //state.stopped_at_sw_break = None;
+        state.stopped_tid = Some(tid);
+        state.stopped_rip = Some(rip);
+        state.event = Some(DebugEvent::SingleStep { tid });
         state.gdb_stub_tid.unwrap()
     };
 
     {
-        scheduler().debug_stop_thread(tid);
+        scheduler().debug_stop_all_except(gdb_stub_tid);
     }
 
-    if !scheduler().debug_resume_thread(gdb_stub_tid) {
-        panic!("failed to resume gdb stub thread tid={}", gdb_stub_tid);
-    }
-
-    info!("#DB BEFORE SWITCH");
+    scheduler().debug_resume_thread(gdb_stub_tid);
     scheduler().switch_thread_from_interrupt();
 }
 

@@ -51,7 +51,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::arch::naked_asm;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering, AtomicU64};
 use goblin::elf::Elf;
 use goblin::elf64;
 use log::error;
@@ -62,6 +62,8 @@ use x86_64::PrivilegeLevel::Ring3;
 use x86_64::VirtAddr;
 use x86_64::structures::gdt::SegmentSelector;
 use x86_64::structures::paging::Page;
+use core::ptr::NonNull;
+use crate::gdbstub::gdbtarget::GdbTrapFrame;
 
 /// kernel & user stack of a thread
 struct Stacks {
@@ -101,6 +103,7 @@ pub struct Thread {
     entry: extern "sysv64" fn(),
     state: AtomicU8,
     wake_pending: AtomicBool, // false => allowed to block; true => do NOT block (wake pending)
+    debug_trap_frame: AtomicU64,
 }
 
 impl Stacks {
@@ -139,6 +142,7 @@ impl Thread {
             entry,
             state: AtomicU8::new(ThreadState::Created.as_u8()),
             wake_pending: AtomicBool::new(false),
+            debug_trap_frame: AtomicU64::new(0),
         };
 
         thread.prepare_kernel_stack();
@@ -206,6 +210,7 @@ impl Thread {
             entry,
             state: AtomicU8::new(ThreadState::Created.as_u8()),
             wake_pending: AtomicBool::new(false),
+            debug_trap_frame: AtomicU64::new(0),
         };
 
         thread.prepare_kernel_stack();
@@ -553,6 +558,15 @@ impl Thread {
 
     pub fn saved_rsp0(&self) -> VirtAddr {
         self.stacks.lock().old_rsp0
+    }
+
+    pub fn set_debug_trap_frame(&self, frame: u64) {
+        self.debug_trap_frame.store(frame, Ordering::Release);
+    }
+
+    pub fn debug_trap_frame(&self) -> Option<NonNull<GdbTrapFrame>> {
+        let frame = self.debug_trap_frame.load(Ordering::Acquire);
+        NonNull::new(frame as *mut GdbTrapFrame)
     }
 }
 

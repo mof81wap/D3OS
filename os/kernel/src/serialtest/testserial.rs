@@ -97,8 +97,8 @@ pub extern "sysv64" fn debug_thread_context_wrapper() {
 
 pub extern "sysv64" fn debug_thread_context() -> ! {
     let tid = scheduler().current_thread().id();
-    info!("THREAD ID={}", tid);
-    info!("ENTERING DEBUG THREAD CONTEXT");
+    //info!("THREAD ID={}", tid);
+    //info!("ENTERING DEBUG THREAD CONTEXT");
     let thread = Thread::new_kernel_thread(test_read, "a");
     //scheduler().ready(thread.clone());
     
@@ -162,6 +162,7 @@ pub fn test_trap_flag_once() {
 pub extern "C" fn gdb_break_here() {
     let x = 1;
     let y = 2;
+    hex(32);
     let z = x + y;
     info!("GDB BREAK HERE");
 }

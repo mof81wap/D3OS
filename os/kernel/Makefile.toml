@@ -21,6 +21,7 @@ LIBRARY_DIRECTORY = "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/os/library"
 LINKER_FILE = "${CARGO_MAKE_WORKING_DIRECTORY}/link.ld"
 RUST_OBJECT = "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}.a"
 ASM_OBJECT = "${BUILD_DIRECTORY}/boot.o"
+GDB_TRAP_OBJECT = "${BUILD_DIRECTORY}/gdb_interrupt_handler.o"
 KERNEL = "${BOOTLOADER_DIRECTORY}/${CARGO_MAKE_PROJECT_NAME}.elf"
 
 [tasks.default]
@@ -44,8 +45,8 @@ condition = { files_modified = { input = [ "${SOURCE_DIRECTORY}/boot.asm" ], out
 
 [tasks.link]
 command = "${LINKER}"
-args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${KERNEL}", "${ASM_OBJECT}", "${RUST_OBJECT}", "-z", "noexecstack" ]
-dependencies = [ "compile", "build-asm" ]
+args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${KERNEL}", "${ASM_OBJECT}", "${GDB_TRAP_OBJECT}","${RUST_OBJECT}", "-z", "noexecstack" ]
+dependencies = [ "compile", "build-asm", "build-gdb-trap-asm" ]
 condition = { files_modified = { input = [ "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*", "${LINKER_FILE}" ], output = [ "${BOOTLOADER_DIRECTORY}/kernel.elf" ] } }
 
 [tasks.check]
@@ -66,3 +67,13 @@ dependencies = [ "remove-kernel" ]
 [tasks.remove-kernel]
 command = "rm"
 args = [ "-f", "${KERNEL}" ]
+
+[tasks.build-gdb-trap-asm]
+command = "nasm"
+args = [
+    "-f", "elf64",
+    "-w+error=label-redef-late",
+    "-o", "${GDB_TRAP_OBJECT}",
+    "${SOURCE_DIRECTORY}/gdb_interrupt_handler.asm"
+]
+condition = { files_modified = { input = [ "${SOURCE_DIRECTORY}/gdb_interrupt_handler.asm" ], output = [ "${GDB_TRAP_OBJECT}" ] } }
