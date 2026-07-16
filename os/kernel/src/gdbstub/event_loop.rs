@@ -96,13 +96,16 @@ impl BlockingEventLoop for GdbBlockingEventLoop {
     fn on_interrupt(
         target: &mut Self::Target,
     ) -> Result<Option<Self::StopReason>, <Self::Target as Target>::Error> {
-        {
-            let mut state = GDB_DEBUG_STATE.lock();
-            state.ctrlc_pending = true;
-        }
-
         disable_int_nested();
 
+        let gdb_tid = {
+            let mut state = GDB_DEBUG_STATE.lock();
+            state.ctrlc_pending = true;
+            state.event = Some(DebugEvent::CtrlC);
+            state.gdb_stub_tid.unwrap()
+        };
+
+        scheduler().debug_stop_all_except(gdb_tid);
         Ok(None)
     }
 }
