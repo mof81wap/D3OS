@@ -224,19 +224,6 @@ impl MultiThreadBase for GdbStubTarget {
         let ctx = thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
         *regs = X86_64CoreRegs::from(ctx);
 
-        let stopped_rip = {
-            let state = GDB_DEBUG_STATE.lock();
-            if state.stopped_tid == Some(tid.get()) {
-                state.stopped_rip
-            } else {
-                None
-            }
-        };
-
-        if let Some(rip) = stopped_rip {
-            regs.rip = rip;
-        }
-
         Ok(())
     }
 
@@ -393,8 +380,8 @@ impl SwBreakpoint for GdbStubTarget {
         let virt_addr_ptr = virt_addr as *mut u8;
 
         {
-            let state = GDB_DEBUG_STATE.lock();
-            if state.breakpoints.iter().any(|bp| bp.address == virt_addr) {
+            let breakpoints = GDB_DEBUG_STATE.breakpoints.lock();
+            if breakpoints.iter().any(|bp| bp.address == virt_addr) {
                 return Ok(true);
             }
         }
@@ -403,8 +390,8 @@ impl SwBreakpoint for GdbStubTarget {
         unsafe { virt_addr_ptr.write_volatile(0xCC) };
 
         {
-            let mut state = GDB_DEBUG_STATE.lock();
-            state.breakpoints.push(GdbSwBreakpoint{address: virt_addr, instruction});
+            let mut breakpoints = GDB_DEBUG_STATE.breakpoints.lock();
+            breakpoints.push(GdbSwBreakpoint{address: virt_addr, instruction});
         }
 
         Ok(true)
@@ -419,11 +406,11 @@ impl SwBreakpoint for GdbStubTarget {
         let virt_addr_ptr = unsafe { virt_addr as *mut u8 };
 
         let bp = {
-            let mut state = GDB_DEBUG_STATE.lock();
-            let Some(index) = state.breakpoints.iter().position(|bp| bp.address == virt_addr) else {
+            let mut breakpoints = GDB_DEBUG_STATE.breakpoints.lock();
+            let Some(index) = breakpoints.iter().position(|bp| bp.address == virt_addr) else {
                 return Ok(false);
             };
-            state.breakpoints.remove(index)
+            breakpoints.remove(index)
         };
 
         let instruction = bp.instruction;
@@ -439,39 +426,8 @@ impl MultiThreadResume for GdbStubTarget {
         let actions = self.resume_actions.lock()
                                         .clone();
 
-        let sw_break = {
-            GDB_DEBUG_STATE.lock().stopped_at_sw_break
-        };
-
-        /*if sw_break.is_none() {
-            scheduler().debug_resume_all();
-            enable_int_nested(true);
-            scheduler().yield_now();
-            return Ok(());
-        }*/
-
         if actions.is_empty() {
-
-            let stopped = {
-                let mut state = GDB_DEBUG_STATE.lock();
-                state.stepping = false;
-                state.event = None;
-                state.stopped_rip = None;
-                state.stopped_tid = None;
-                state.stopped_at_sw_break.take()
-            };
-
-            if let Some((tid, addr)) = stopped {
-                scheduler().debug_resume_thread(tid);
-                scheduler().debug_resume_all();
-            } else {
-                scheduler().debug_resume_all();
-
-                for i in 1..10 {
-                    scheduler().debug_resume_thread(i);
-                }
-            }
-
+            scheduler().debug_resume_all();
             enable_int_nested(true);
             return Ok(());
         }
@@ -479,25 +435,12 @@ impl MultiThreadResume for GdbStubTarget {
         for (tid, action) in actions.iter() {
             match action {
                 ResumeAction::Continue => {
-                    {
-                        let mut state = GDB_DEBUG_STATE.lock();
-                        state.stepping = false;
-                        state.event = None;
-                        state.stopped_at_sw_break = None;
-                        state.stopped_tid = None;
-                        state.stopped_rip = None;
-                    }
                     scheduler().debug_resume_thread(*tid);
                 }
                 ResumeAction::SingleStep => {
                     let thread = scheduler()
                             .thread(*tid)
                             .ok_or(())?;
-                    {
-                        let mut state = GDB_DEBUG_STATE.lock();
-                        state.stepping = true;
-                        state.event = None;
-                    }
 
                     if let Some(ptr) = thread.debug_trap_frame() {
                         let frame = unsafe { &mut *ptr.as_ptr() };
@@ -509,15 +452,11 @@ impl MultiThreadResume for GdbStubTarget {
                     }
 
                     scheduler().debug_resume_thread(*tid);
-                    return Ok(());
                 }
             }
         }
 
-        {
-            let mut state = GDB_DEBUG_STATE.lock();
-            state.event = None;
-        }
+        scheduler().debug_resume_all();
         enable_int_nested(true);
         Ok(())
     }
@@ -584,19 +523,18 @@ impl HwBreakpoint for GdbStubTarget {
         let virt_addr = addr as u64;
 
         {
-            let mut state = GDB_DEBUG_STATE.lock();
-            if state.hwbreakpoints.iter().any(|bp| bp.address == virt_addr) {
+            let mut hwbreakpoints = GDB_DEBUG_STATE.hwbreakpoints.lock();
+            if hwbreakpoints.iter().any(|bp| bp.address == virt_addr) {
                 return Ok(true);
             }
 
-            let Some(index) = state.hwbreakpoints.iter().position(|bp| bp.address == 0)
+            let Some(index) = hwbreakpoints.iter().position(|bp| bp.address == 0)
             else {
                 return Ok(false);
             };
 
-            state.hwbreakpoints[index].address = virt_addr;
+            hwbreakpoints[index].address = virt_addr;
             let mut dr7 = Dr7::read();
-            info!("DR7={:?}", dr7);
 
             match index {
                 0 => {
@@ -622,7 +560,6 @@ impl HwBreakpoint for GdbStubTarget {
                 _ => {},
             }
         }
-        info!("DR7={:?}", Dr7::read());
         Ok(true)
     }
 
@@ -634,9 +571,9 @@ impl HwBreakpoint for GdbStubTarget {
         let virt_addr = addr as u64;
 
         {
-            let mut state = GDB_DEBUG_STATE.lock();
-            if let Some(index) = state.hwbreakpoints.iter().position(|bp| bp.address == virt_addr) {
-                state.hwbreakpoints[index].address = 0;
+            let mut hwbreakpoints = GDB_DEBUG_STATE.hwbreakpoints.lock();
+            if let Some(index) = hwbreakpoints.iter().position(|bp| bp.address == virt_addr) {
+                hwbreakpoints[index].address = 0;
                 let mut dr7 = Dr7::read();
                 match index {
                     0 => {
@@ -695,16 +632,13 @@ fn gdb_handle_int3(frame: &mut GdbTrapFrame) {
     thread.set_debug_trap_frame(frame as *mut GdbTrapFrame as u64);
 
     let gdb_stub_tid = {
-        let mut state = GDB_DEBUG_STATE.lock();
-        state.stopped_at_sw_break = Some((tid, bp_addr));
-        state.stopped_tid = Some(tid);
-        state.stopped_rip = Some(bp_addr);
+        let mut event = GDB_DEBUG_STATE.event.lock();
 
-        state.event = Some(DebugEvent::SwBreakpoint {
+        *event = Some(DebugEvent::SwBreakpoint {
             tid,
             addr: bp_addr,
         });
-        state.gdb_stub_tid.unwrap()
+        GDB_DEBUG_STATE.gdb_stub_tid.lock().unwrap()
     };
 
     scheduler().debug_stop_all_except(gdb_stub_tid);
@@ -723,15 +657,7 @@ fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
         Dr6Flags::TRAP3
     );
     
-    let stepping = {
-        GDB_DEBUG_STATE.lock().stepping
-    };
-
     frame.rflags &= !RFLAGS_TF;
-
-    if !stepping && !hit_hw_bp {
-        return;
-    }
 
     let thread = scheduler()
         .try_get_current_thread()
@@ -741,19 +667,14 @@ fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
     thread.set_debug_trap_frame(frame as *mut GdbTrapFrame as u64);
 
     let gdb_stub_tid = {
-        let mut state = GDB_DEBUG_STATE.lock();
+        let mut event = GDB_DEBUG_STATE.event.lock();
 
-        state.stepping = false;
-        state.stepping_over = None;
-        //state.stopped_at_sw_break = None;
-        state.stopped_tid = Some(tid);
-        state.stopped_rip = Some(rip);
         if hit_hw_bp {
-            state.event = Some(DebugEvent::HwBreakpoint{ tid });
+            *event = Some(DebugEvent::HwBreakpoint{ tid });
         } else {
-            state.event = Some(DebugEvent::SingleStep { tid });
+            *event = Some(DebugEvent::SingleStep { tid });
         }
-        state.gdb_stub_tid.unwrap()
+        GDB_DEBUG_STATE.gdb_stub_tid.lock().unwrap()
     };
 
     {

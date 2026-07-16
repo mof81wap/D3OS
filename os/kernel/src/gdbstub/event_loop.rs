@@ -21,9 +21,7 @@ pub extern "sysv64" fn init_gdb_stub() {
     info!("GDB INIT TID={}", tid);
 
     {
-        let mut state = GDB_DEBUG_STATE.lock();
-        state.gdbstub_is_initilaized = true;
-        state.gdb_stub_tid = Some(tid);
+        *GDB_DEBUG_STATE.gdb_stub_tid.lock() = Some(tid);
     }
 
     let conn = GdbStubConnection::new();
@@ -65,8 +63,7 @@ impl BlockingEventLoop for GdbBlockingEventLoop {
             }
 
             let event = {
-                let mut state = GDB_DEBUG_STATE.lock();
-                state.event.take()
+                GDB_DEBUG_STATE.event.lock().take()
             };
 
             if let Some(event) = event {
@@ -99,10 +96,8 @@ impl BlockingEventLoop for GdbBlockingEventLoop {
         disable_int_nested();
 
         let gdb_tid = {
-            let mut state = GDB_DEBUG_STATE.lock();
-            state.ctrlc_pending = true;
-            state.event = Some(DebugEvent::CtrlC);
-            state.gdb_stub_tid.unwrap()
+            *GDB_DEBUG_STATE.event.lock() = Some(DebugEvent::CtrlC);
+            GDB_DEBUG_STATE.gdb_stub_tid.lock().unwrap()
         };
 
         scheduler().debug_stop_all_except(gdb_tid);

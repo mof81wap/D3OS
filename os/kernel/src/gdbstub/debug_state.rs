@@ -28,29 +28,15 @@ pub struct StepOver {
 
 #[derive(Debug)]
 pub struct DebugState {
-    pub event: Option<DebugEvent>,
-    pub ctrlc_pending: bool,
-    pub gdbstub_is_initilaized: bool,
-    pub stepping: bool,
-    pub gdb_stub_tid: Option<usize>,
-    pub breakpoints: Vec<GdbSwBreakpoint>,
-    pub stopped_at_sw_break: Option<(usize, u64)>,
-    pub stepping_over: Option<StepOver>,
-    pub stopped_tid: Option<usize>,
-    pub stopped_rip: Option<u64>,
-    pub hwbreakpoints: [GdbHwBreakpoint; 4],
+    pub event: Mutex<Option<DebugEvent>>,
+    pub gdb_stub_tid: Mutex<Option<usize>>,
+    pub breakpoints: Mutex<Vec<GdbSwBreakpoint>>,
+    pub hwbreakpoints: Mutex<[GdbHwBreakpoint; 4]>,
 }
 
-pub static GDB_DEBUG_STATE: Mutex<DebugState> = Mutex::new(DebugState {
-    event: None,
-    ctrlc_pending: false,
-    gdbstub_is_initilaized: false,
-    stepping: false,
-    gdb_stub_tid: None,
-    breakpoints: Vec::new(),
-    stopped_at_sw_break: None,
-    stepping_over: None,
-    stopped_tid: None,
-    stopped_rip: None,
-    hwbreakpoints: [GdbHwBreakpoint{address: 0}; 4],
-});
+pub static GDB_DEBUG_STATE: DebugState = DebugState {
+    event: Mutex::new(None),
+    gdb_stub_tid: Mutex::new(None),
+    breakpoints: Mutex::new(Vec::new()),
+    hwbreakpoints: Mutex::new([GdbHwBreakpoint{address: 0}; 4]),
+};
