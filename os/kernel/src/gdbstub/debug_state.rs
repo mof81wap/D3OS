@@ -26,7 +26,7 @@ pub struct DebugState {
     pub gdb_stub_tid: Mutex<Option<usize>>,
     pub breakpoints: Mutex<Vec<GdbSwBreakpoint>>,
     pub hwbreakpoints: Mutex<[GdbHwBreakpoint; 4]>,
-    pub handler_active: AtomicBool,
+    pub scheduler_locking: AtomicBool,
 }
 
 #[cfg(feature = "gdbstub")]
@@ -35,5 +35,5 @@ pub static GDB_DEBUG_STATE: DebugState = DebugState {
     gdb_stub_tid: Mutex::new(None),
     breakpoints: Mutex::new(Vec::new()),
     hwbreakpoints: Mutex::new([GdbHwBreakpoint{address: 0}; 4]),
-    handler_active: AtomicBool::new(false),
+    scheduler_locking: AtomicBool::new(false),
 };

@@ -342,15 +342,12 @@ impl MultiThreadBase for GdbStubTarget {
         &mut self,
         thread_is_active: &mut dyn FnMut(Tid)
     ) -> Result<(), Self::Error> {
-        info!("ENTER LIST THREADS");
         let active_ids = scheduler().gdb_thread_ids();
-
         for id in active_ids {
             if id != 0 {
                 thread_is_active(Tid::new(id).unwrap());
             }
         }
-        info!("EXIT LIST THREADS");
         Ok(())
     }
 
@@ -429,7 +426,6 @@ impl MultiThreadResume for GdbStubTarget {
                                         .clone();
 
         if actions.is_empty() {
-            info!("ACTIONS EMTPY");
             scheduler().debug_resume_all();
             enable_int_nested(true);
             return Ok(());
@@ -438,12 +434,9 @@ impl MultiThreadResume for GdbStubTarget {
         for (tid, action) in actions.iter() {
             match action {
                 ResumeAction::Continue => {
-                    info!("ACTION CONT");
                     scheduler().debug_resume_thread(*tid);
-                    info!("EXIT ACTION CONT");
                 }
                 ResumeAction::SingleStep => {
-                    info!("ACTION STEP");
                     let thread = scheduler()
                             .thread(*tid)
                             .ok_or(())?;
@@ -458,14 +451,15 @@ impl MultiThreadResume for GdbStubTarget {
                     }
 
                     scheduler().debug_resume_thread(*tid);
-                    info!("EXIT ACTION STEP");
                 }
             }
         }
 
-        //scheduler().debug_resume_all();
-        enable_int_nested(true);
+        if GDB_DEBUG_STATE.scheduler_locking.load(Ordering::Acquire) {
+            scheduler().debug_resume_all();
+        }
         info!("EXIT RESUME");
+        enable_int_nested(true);
         Ok(())
     }
 
@@ -518,6 +512,12 @@ impl MultiThreadSchedulerLocking for GdbStubTarget {
     fn set_resume_action_scheduler_lock(
         &mut self
     ) -> Result<(), Self::Error> {
+        if GDB_DEBUG_STATE.scheduler_locking.load(Ordering::Acquire) {
+            GDB_DEBUG_STATE.scheduler_locking.store(false, Ordering::Release)
+        } else {
+            GDB_DEBUG_STATE.scheduler_locking.store(true, Ordering::Release)
+        }
+
         Ok(())
     }
 }
