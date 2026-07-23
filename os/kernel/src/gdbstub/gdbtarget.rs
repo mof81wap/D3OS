@@ -18,7 +18,7 @@ use x86_64::structures::idt::InterruptStackFrame;
 use x86_64::registers::rflags::RFlags;
 use spin::Mutex;
 use alloc::vec::Vec;
-use crate::gdbstub::debug_state::{GDB_DEBUG_STATE, DebugEvent, StepOver};
+use crate::gdbstub::debug_state::{GDB_DEBUG_STATE, DebugEvent};
 use gdbstub::stub::MultiThreadStopReason;
 use crate::device::cpu::{disable_int_nested, enable_int_nested};
 use crate::process::thread::ThreadState;
@@ -295,15 +295,8 @@ impl MultiThreadBase for GdbStubTarget {
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
 
-        let process = thread.process();
-
         for (offset, byte) in data.iter_mut().enumerate() {
             let virt_addr = start_addr + offset as u64;
-
-            let phys_addr = process
-                            .virtual_address_space
-                            .get_phys(virt_addr)
-                            .ok_or(TargetError::NonFatal)?;
 
             unsafe { *byte = (virt_addr as *const u8).read(); }
         }
@@ -320,17 +313,10 @@ impl MultiThreadBase for GdbStubTarget {
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
 
-        let process = thread.process();
-
         for (offset, byte) in data.iter().enumerate() {
             let virt_addr = start_addr + offset as u64;
 
-            let phys_addr = process
-                            .virtual_address_space
-                            .get_phys(virt_addr)
-                            .ok_or(TargetError::NonFatal)?;
-
-            unsafe { *(phys_addr.as_u64() as *mut u8) = *byte; }
+            unsafe { *(virt_addr as *mut u8) = *byte; }
         }
 
 
@@ -577,22 +563,18 @@ impl HwBreakpoint for GdbStubTarget {
                 let mut dr7 = Dr7::read();
                 match index {
                     0 => {
-                        Dr0::write(virt_addr);
                         dr7.remove_flags(Dr7Flags::GLOBAL_BREAKPOINT_0_ENABLE);
                         Dr7::write(dr7);
                     },
                     1 => {
-                        Dr1::write(virt_addr);
                         dr7.remove_flags(Dr7Flags::GLOBAL_BREAKPOINT_1_ENABLE);
                         Dr7::write(dr7);
                     },
                     2 => {
-                        Dr2::write(virt_addr);
                         dr7.remove_flags(Dr7Flags::GLOBAL_BREAKPOINT_2_ENABLE);
                         Dr7::write(dr7);
                     },
                     3 => {
-                        Dr3::write(virt_addr);
                         dr7.remove_flags(Dr7Flags::GLOBAL_BREAKPOINT_3_ENABLE);
                         Dr7::write(dr7);
                     },
@@ -648,7 +630,6 @@ fn gdb_handle_int3(frame: &mut GdbTrapFrame) {
 
 fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
     disable_int_nested();
-    let rip = frame.rip;
     let dr6 = Dr6::read();
     let hit_hw_bp = dr6.intersects(
         Dr6Flags::TRAP0 |

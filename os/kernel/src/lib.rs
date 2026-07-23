@@ -75,6 +75,7 @@ pub mod storage;
 pub mod syscall;
 pub mod sync;
 pub mod serialtest;
+#[cfg(feature = "gdbstub")]
 pub mod gdbstub;
 
 pub mod built_info {

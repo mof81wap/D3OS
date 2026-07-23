@@ -14,9 +14,12 @@ use x86_64::{PrivilegeLevel, set_general_handler};
 use x86_64::structures::idt::{InterruptStackFrame, InterruptStackFrameValue};
 use x86_64::structures::paging::page::PageRange;
 use x86_64::structures::paging::{Page, PageTableFlags};
+#[cfg(feature = "gdbstub")]
 use crate::gdbstub::gdbtarget;
+#[cfg(feature = "gdbstub")]
 use crate::gdbstub::debug_state::GDB_DEBUG_STATE;
 use x86_64::VirtAddr;
+#[cfg(feature = "gdbstub")]
 use crate::gdbstub::gdbtarget::{gdb_breakpoint_entry, gdb_debug_entry};
 
 //----PROCFS SUPPORT ------------------------------------------------------------------------//
@@ -174,6 +177,7 @@ pub fn setup_idt() {
     set_general_handler!(&mut idt, handle_interrupt, 32..255);
     set_general_handler!(&mut idt, handle_page_fault, 14);
 
+    #[cfg(feature = "gdbstub")]
     unsafe {
         idt.debug.set_handler_addr(VirtAddr::new(gdb_debug_entry as u64));
         idt.breakpoint.set_handler_addr(VirtAddr::new(gdb_breakpoint_entry as u64));

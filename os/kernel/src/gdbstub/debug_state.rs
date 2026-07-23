@@ -19,13 +19,6 @@ pub enum DebugEvent {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct StepOver {
-    pub tid: usize,
-    pub addr: u64,
-    pub ctx_ptr: usize,
-}
-
 #[derive(Debug)]
 pub struct DebugState {
     pub event: Mutex<Option<DebugEvent>>,
@@ -34,6 +27,7 @@ pub struct DebugState {
     pub hwbreakpoints: Mutex<[GdbHwBreakpoint; 4]>,
 }
 
+#[cfg(feature = "gdbstub")]
 pub static GDB_DEBUG_STATE: DebugState = DebugState {
     event: Mutex::new(None),
     gdb_stub_tid: Mutex::new(None),

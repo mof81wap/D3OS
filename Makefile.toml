@@ -13,8 +13,8 @@ LINKER = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "ld", mappin
 QEMU_AUDIO_DEVICE = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "pa", mapping = { "macos" = "coreaudio" } }
 QEMU_DISPLAY = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "gtk,gl=on", mapping = { "macos" = "cocoa" } }
 QEMU_VIRTIO_DEVICE = { source = "${CARGO_MAKE_RUST_TARGET_OS}", default_value = "virtio-vga-gl", mapping = { "macos" = "virtio-vga" } }
-#RUSTFLAGS="--cfg getrandom_backend=\"rdrand\""
-RUSTFLAGS = "--cfg getrandom_backend=\"rdrand\" -C force-frame-pointers=yes -C debuginfo=2 -C opt-level=0"
+RUSTFLAGS="--cfg getrandom_backend=\"rdrand\""
+#RUSTFLAGS = "--cfg getrandom_backend=\"rdrand\" -C force-frame-pointers=yes -C debuginfo=2 -C opt-level=0"
 
 #VIRGL_DEBUG = "all"
 #GALLIUM_DEBUG = "trace"
@@ -161,6 +161,53 @@ args = [
     "-S", "-gdb", "tcp::1234"
 ]
 
+[tasks.gdbstub]
+command = "qemu-system-x86_64"
+dependencies = [ "image-gdbstub", "hdd", "ovmf" ]
+args = [
+    # Base machine configuration
+    "-machine", "q35,nvdimm=on,pcspk-audiodev=audio0",
+    "-m", "512M,slots=2,maxmem=1G",
+    "-cpu", "Haswell,fsgsbase",
+    "-bios", "RELEASEX64_OVMF.fd",
+    "-boot", "d",
+    "-vga", "none",
+    "-rtc", "base=localtime",
+    "-serial", "stdio",
+    "-serial", "file:towboot-com2.log",
+    "-serial", "tcp:127.0.0.1:4321,server=on,wait=off,nodelay=on",
+    #"-trace", "virtio_gpu_*",
+    #"-trace", "virtio_gpu_virgl_process_cmd",
+
+    # Hard disk drive configuration
+    "-device", "piix3-ide,id=ide",  # IDE Controller
+    "-device", "ahci,id=ahci",      # AHCI Controller
+    "-drive", "driver=raw,if=none,id=boot,file.filename=d3os.img",  # Boot drive
+    "-drive", "driver=raw,if=none,id=hdd,file.filename=hdd.img",    # HDD drive containing root filesystem
+    "-device", "ide-hd,bus=ahci.0,drive=boot",  # Attach boot drive to AHCI controller (boots faster than on the IDE controller)
+    "-device", "ide-hd,bus=ide.0,drive=hdd",    # Attach HDD drive to IDE controller (D3OS does not support AHCI yet)
+
+    # NVDIMM configuration
+    "-device", "nvdimm,memdev=mem1,id=nv1,label-size=2M",
+    "-object", "memory-backend-file,id=mem1,share=on,mem-path=nvdimm0,size=16M",
+
+    # Network configuration
+    "-nic", "model=rtl8139,id=rtl8139,hostfwd=udp::1797-:1797,hostfwd=tcp::1797-:1797",
+    "-object", "filter-dump,id=filter1,netdev=rtl8139,file=rtl8139.dump",
+
+    # VirtIO Devices
+    "-display", "${QEMU_DISPLAY}",
+    "-device", "${QEMU_VIRTIO_DEVICE}", # virtio-gpu-pci, virtio-vga
+    "-device", "virtio-rng-pci",
+    #"-device", "virtio-keyboard-pci",
+    #"-device", "virtio-mouse-pci",
+    #"-device", "vhost-vsock-pci,guest-cid=3",
+    #"-device", "virtio-sound-pci,audiodev=audio0",
+
+    # Audio configuration (Using pulse audio for Linux)
+    "-audiodev", "id=audio0,driver=${QEMU_AUDIO_DEVICE}",
+]
+
 [tasks.debug-signal-vscode]
 command = "echo"
 args = [ "Ready to debug" ]
@@ -183,6 +230,20 @@ args = [ "test" ]
 [tasks.link-members]
 run_task = { name = "link", fork = true }
 dependencies = [ "create-initrd-directory" ]
+
+[tasks.link-members-gdbstub]
+run_task = { name = "link-gdbstub", fork = true }
+dependencies = [ "create-initrd-directory" ]
+
+[tasks.kernel-gdbstub]
+command = "cargo"
+args = [
+    "make",
+    "--no-workspace",
+    "--cwd",
+    "os/kernel",
+    "link-gdbstub"
+]
 
 [tasks.check-members]
 run_task = { name = "check", fork = true }
@@ -231,6 +292,13 @@ cwd = "${BOOTLOADER_DIRECTORY}"
 command = "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/towbootctl"
 args = [ "image", "--target", "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/d3os.img", "--", "-config", "towboot.toml"]
 dependencies = [ "link-members", "initrd", "towbootctl" ]
+condition = { files_modified = { input = [ "${BOOTLOADER_DIRECTORY}/initrd.tar", "${BOOTLOADER_DIRECTORY}/kernel.elf", "${BOOTLOADER_DIRECTORY}/towboot.toml" ], output = [ "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/d3os.img" ] } }
+
+[tasks.image-gdbstub]
+cwd = "${BOOTLOADER_DIRECTORY}"
+command = "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/towbootctl"
+args = [ "image", "--target", "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/d3os.img", "--", "-config", "towboot.toml" ]
+dependencies = [ "kernel-gdbstub", "link-members", "initrd", "towbootctl" ]
 condition = { files_modified = { input = [ "${BOOTLOADER_DIRECTORY}/initrd.tar", "${BOOTLOADER_DIRECTORY}/kernel.elf", "${BOOTLOADER_DIRECTORY}/towboot.toml" ], output = [ "${CARGO_MAKE_WORKSPACE_WORKING_DIRECTORY}/d3os.img" ] } }
 
 [tasks.towbootctl]

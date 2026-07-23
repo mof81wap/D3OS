@@ -165,8 +165,14 @@ pub extern "C" fn gdb_break_here() {
     let y = 2;
     hex(32);
     info!("GDB BREAK HERE DR7={:?}", Dr7::read());
+    scheduler();
     let z = x + y;
     info!("GDB BREAK HERE");
+
+    for i in 0..1000000 {
+        let mut x = 0;
+        x = i + 1;
+    }
 }
 
 pub fn test_gdb_target_ops() {

@@ -55,7 +55,8 @@ use x86_64::structures::paging::frame::PhysFrameRange;
 use x86_64::structures::paging::{PageTable, PageTableFlags, PhysFrame};
 use x86_64::{PhysAddr, VirtAddr};
 use crate::serialtest::testserial::{test_com2, test_serial_loop, test_non_write_only, test_read, debug_thread_context};
-use crate::gdbstub::event_loop::{init_gdb_stub};
+#[cfg(feature = "gdbstub")]
+use crate::gdbstub::event_loop::{init_gdb_stub_thread};
 use crate::serialtest::testserial::debug_thread_context_wrapper;
 
 // import labels from linker script 'link.ld'
@@ -353,7 +354,8 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     }
     scheduler().ready(Thread::new_kernel_thread(cleanup, "cleanup"));
     info!("BEFORE INIT GDB");
-    scheduler().ready(Thread::new_kernel_thread(init_gdb_stub, "init_gdb_stub"));
+    #[cfg(feature = "gdbstub")]
+    init_gdb_stub_thread();
     info!("BEFORE DEBUG THREAD CONTEXT");
     scheduler().ready(Thread::new_kernel_thread(debug_thread_context_wrapper, "debug_thread_context"));
 

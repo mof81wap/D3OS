@@ -63,6 +63,7 @@ use x86_64::VirtAddr;
 use x86_64::structures::gdt::SegmentSelector;
 use x86_64::structures::paging::Page;
 use core::ptr::NonNull;
+#[cfg(feature = "gdbstub")]
 use crate::gdbstub::gdbtarget::GdbTrapFrame;
 
 /// kernel & user stack of a thread
@@ -103,6 +104,7 @@ pub struct Thread {
     entry: extern "sysv64" fn(),
     state: AtomicU8,
     wake_pending: AtomicBool, // false => allowed to block; true => do NOT block (wake pending)
+    #[cfg(feature = "gdbstub")]
     debug_trap_frame: AtomicU64,
 }
 
@@ -142,6 +144,7 @@ impl Thread {
             entry,
             state: AtomicU8::new(ThreadState::Created.as_u8()),
             wake_pending: AtomicBool::new(false),
+            #[cfg(feature = "gdbstub")]
             debug_trap_frame: AtomicU64::new(0),
         };
 
@@ -210,6 +213,7 @@ impl Thread {
             entry,
             state: AtomicU8::new(ThreadState::Created.as_u8()),
             wake_pending: AtomicBool::new(false),
+            #[cfg(feature = "gdbstub")]
             debug_trap_frame: AtomicU64::new(0),
         };
 
@@ -560,10 +564,12 @@ impl Thread {
         self.stacks.lock().old_rsp0
     }
 
+    #[cfg(feature = "gdbstub")]
     pub fn set_debug_trap_frame(&self, frame: u64) {
         self.debug_trap_frame.store(frame, Ordering::Release);
     }
 
+    #[cfg(feature = "gdbstub")]
     pub fn debug_trap_frame(&self) -> Option<NonNull<GdbTrapFrame>> {
         let frame = self.debug_trap_frame.load(Ordering::Acquire);
         NonNull::new(frame as *mut GdbTrapFrame)

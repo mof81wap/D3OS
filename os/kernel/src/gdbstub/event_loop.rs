@@ -13,6 +13,7 @@ use log::info;
 use gdbstub::target::ext::breakpoints::SwBreakpoint;
 use crate::device::cpu::{disable_int_nested};
 use crate::{scheduler};
+use crate::process::thread::Thread;
 
 enum GdbBlockingEventLoop{}
 
@@ -40,6 +41,11 @@ pub extern "sysv64" fn init_gdb_stub() {
         }
     }
     panic!("GDB stub thread must never exit");
+}
+
+#[cfg(feature = "gdbstub")]
+pub fn init_gdb_stub_thread() {
+    scheduler().ready(Thread::new_kernel_thread(init_gdb_stub, "init_gdb_stub"));
 }
 
 impl BlockingEventLoop for GdbBlockingEventLoop {
