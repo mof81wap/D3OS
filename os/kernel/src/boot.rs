@@ -7,11 +7,12 @@
    ║ Author: Fabian Ruhland & Michael Schoettner, HHU                        ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
-
-use crate::consts;
+use crate::device::apic::get_cpu_count;
+use crate::process::core_local_storage::{init_gdt_for_this_core, install_gs_base, scheduler, scheduler_start};
+use crate::{consts, ipi, per_cpu_init};
 use crate::device::pit::Timer;
 use crate::device::ps2::{Keyboard, Mouse};
-use crate::device::{qemu_cfg, virtio};
+use crate::device::{cpu, virtio};
 use crate::device::serial::SerialPort;
 use crate::interrupt::interrupt_dispatcher;
 use crate::memory::nvmem::Nfit;
@@ -25,7 +26,7 @@ use crate::{
     efi_services_available, init_acpi_tables, init_apic, init_boot_info,
     init_cpu_info, init_initrd, init_lfb, init_lfb_info, init_pci,
     init_serial_port, init_tty, keyboard, logger, mouse,
-    process_manager, scheduler, serial_port, timer, tss,
+    process_manager, serial_port, timer, tss,
 };
 use crate::{built_info, memory, naming, network, storage};
 
@@ -37,7 +38,7 @@ use core::ffi::c_void;
 use core::mem::size_of;
 use core::ops::Deref;
 use core::ptr;
-use log::{trace, debug, info, warn, LevelFilter};
+use log::{info, warn, LevelFilter};
 use multiboot2::{BootInformation, BootInformationHeader, EFIMemoryMapTag, MemoryAreaType, MemoryMapTag, TagHeader};
 use uefi::data_types::Handle;
 use uefi::mem::memory_map::MemoryMap;
@@ -63,6 +64,9 @@ use crate::serialtest::testserial::debug_thread_context_wrapper;
 unsafe extern "C" {
     static ___KERNEL_DATA_START__: c_void; // start address of OS image
     static ___KERNEL_DATA_END__: c_void; // end address of OS image
+    static ___BOOT_AP_START__: c_void; // start address of the AP code
+    static ___BOOT_AP_END__: c_void; // start address of the AP code
+    static ___KERNEL_CR3__: c_void; // kernel cr3 addr
 }
 
 const BOOT_TO_GUI: bool = false; // Immediately start the GUI instead of terminal (Debug)
@@ -93,32 +97,22 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     info!("Initializing GDT");
     init_gdt();
 
-    // Enable FSGSBASE
-    info!("Enabling FSGSBASE instructions");
-    unsafe {
-        Cr4::update(|flags| flags.insert(Cr4Flags::FSGSBASE));
-    }
-
-    // and initialize kernel heap, after which formatted strings may be used in logs and panics.
-    info!("Initializing kernel heap");
-    let heap_region = dram::boot_alloc(consts::KERNEL_HEAP_PAGES).expect("Failed to allocate kernel heap frames!");
-    dram::insert_reserved(heap_region);
-    unsafe {
-        allocator().init(&heap_region);
-    }
-    info!("Kernel heap region:  [{:#x} - {:#x}], #frames: [{}]", 
-        heap_region.start.start_address().as_u64(), 
-        heap_region.end.start_address().as_u64(),
-        consts::KERNEL_HEAP_PAGES,
-    );
-
     // The bootloader marks the kernel image region as available, so we need to mark it manually as reserved
+    // And also the AP boot Region
     let kernel_image_region = kernel_image_region();
     dram::insert_reserved(kernel_image_region);
     info!("kernel image region: [{:#x} - {:#x}], #frames: [{}]", 
         kernel_image_region.start.start_address().as_u64(), 
         kernel_image_region.end.start_address().as_u64(),
         kernel_image_region.len()
+    );
+
+    let ap_boot_region = ap_boot_region();
+    dram::insert_reserved(ap_boot_region);
+    info!("AP boot region:      [{:#x} - {:#x}], #frames: [{}]", 
+        ap_boot_region.start.start_address().as_u64(), 
+        ap_boot_region.end.start_address().as_u64(),
+        ap_boot_region.len()
     );
 
     // also mark the  memory region for 'initrd' as reserved
@@ -135,7 +129,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
         initrd_region.len()
     );
 
-    // and finally the same for the multiboot region
+    // also the multiboot region
     let multiboot_region = get_multiboot_frames(&multiboot);
     dram::insert_reserved(multiboot_region);
     info!(
@@ -145,15 +139,52 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
         multiboot_region.len()
     );
 
+    // and finally the same for the framebuffer
+    let fb_info = multiboot
+        .framebuffer_tag()
+        .expect("No framebuffer information provided by bootloader!")
+        .expect("Unknown framebuffer type!");
+    let fb_start_phys_addr = fb_info.address();
+    let fb_end_phys_addr = fb_start_phys_addr + (fb_info.height() * fb_info.pitch()) as u64;
+    dram::insert_reserved(PhysFrameRange {
+        start: PhysFrame::containing_address(PhysAddr::new(fb_start_phys_addr)),
+        end: PhysFrame::containing_address(PhysAddr::new(fb_end_phys_addr - 1)),
+    });
+    info!(
+        "framebuffer region: [Start: {:#x}, End: {:#x}] ({}x{})",
+        fb_start_phys_addr,
+        fb_end_phys_addr,
+        fb_info.width(),
+        fb_info.height(),
+    );
+
     // Remove all reserved regions from the free regions in 'dram'
     dram::finalize();
-
     // Dump information about available and reserved memory regions
     dram::dump();
 
-    // Initialize the page frame allocator
+    // now that we know which memory is in use (minus the devices),
+    // we can allocate memory for the kernel heap
+    info!("Initializing kernel heap");
+    let heap_region = dram::boot_alloc(consts::KERNEL_HEAP_PAGES)
+        .expect("Failed to allocate kernel heap frames!");
+    unsafe {
+        allocator().init(&heap_region);
+    }
+    info!("Kernel heap region:  [{:#x} - {:#x}], #frames: [{}]",
+        heap_region.start.start_address().as_u64(),
+        heap_region.end.start_address().as_u64(),
+        consts::KERNEL_HEAP_PAGES,
+    );
+
+    // with a heap, we can initialize the page frame allocator
     memory::init();
     memory::dump();
+
+    // Enable required CPU extensions
+    info!("Enabling SIMD and FSGSBASE instructions");
+    cpu::enable_simd();
+    cpu::enable_fsgsbase();
   
     // Initialize CPU information
     init_cpu_info();
@@ -164,6 +195,10 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     kernel_process.virtual_address_space.page_tables().dump();
     kernel_process.virtual_address_space.load_address_space();
 
+    unsafe {
+        kernel_cr3().write(Cr3::read().0.start_address().as_u64());
+    }
+
     // Initialize serial port and enable serial logging
     init_serial_port();
     if let Some(serial) = serial_port() {
@@ -171,15 +206,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     }
 
     // Map the framebuffer, needed for text output of the terminal
-    let fb_info = multiboot
-        .framebuffer_tag()
-        .expect("No framebuffer information provided by bootloader!")
-        .expect("Unknown framebuffer type!");
-    let fb_start_phys_addr = fb_info.address();
-    let fb_end_phys_addr = fb_start_phys_addr + (fb_info.height() * fb_info.pitch()) as u64;
-    
     sys_vmem::init_fb_info(&fb_info);
-
     kernel_process.virtual_address_space.kernel_map_devm_identity(
         fb_start_phys_addr,
         fb_end_phys_addr,
@@ -187,14 +214,6 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
         VmaType::DeviceMemory,
         "framebuffer",
     );
-    info!(
-        "framebuffer region: [Start: {:#x}, End: {:#x}] ({}x{})",
-        fb_start_phys_addr,
-        fb_end_phys_addr,
-        fb_info.width(),
-        fb_info.height(),
-        );
-
     // Initialize lfb info (For terminal_emulator)
     init_lfb_info(fb_info.address(), fb_info.pitch(), fb_info.width(), fb_info.height(), fb_info.bpp());
     // Initialize framebuffer (For window_manager)
@@ -248,10 +267,22 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     };
     init_acpi_tables(rsdp_addr);
 
+    // Prerequisite for scheduler, apic & dispatcher (also terminal)
+    info!("Initializing per-CPU data structures: {:?}", get_cpu_count());
+    per_cpu_init(get_cpu_count(), 100);
+    install_gs_base(0);
+
+    // Set up the GDT (Global Descriptor Table)
+    // Has to be done after EFI boot services have been exited, since they rely on their own GDT
+    // Also has to be done after the cls is setup, for tss() to work
+    info!("Initializing GDT");
+    init_gdt_for_this_core();
+
     interrupt_dispatcher::setup_idt();
 
     syscall_dispatcher::init();
 
+    info!("Initializing APIC");
     init_apic();
 
     // Initialize timer
@@ -273,6 +304,9 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
             None => warn!("Bootloader did not provide EFI system table pointer"),
         }
     }
+
+    // Initialize AP's
+    start_ap_processors();
 
     // Dump information about EFI runtime service
     info!(
@@ -381,7 +415,11 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     info!("Starting scheduler");
     apic().start_timer(10);
 
-    scheduler().start();
+
+    // loop {
+    //     info!("System time: {}", sys_get_system_time());
+    // }
+    scheduler_start();
 }
 
 /// Set up the GDT
@@ -587,4 +625,46 @@ fn unprotect_frame(frame: PhysFrame, root_level: usize) {
         page_table = unsafe { (entry.addr().as_u64() as *mut PageTable).as_mut().unwrap() };
         level -= 1;
     }
+}
+
+
+
+fn boot_ap_end() -> *const u64{
+    ptr::from_ref(unsafe { &___BOOT_AP_END__ }).cast()
+}
+fn boot_ap_start() -> *const u64{
+    ptr::from_ref(unsafe { &___BOOT_AP_START__ }).cast()
+}
+
+fn kernel_cr3() -> *mut u64 {
+    ptr::from_ref(unsafe { &___KERNEL_CR3__ }).cast_mut().cast()
+}
+
+fn ap_boot_region() -> PhysFrameRange {
+    let start = PhysFrame::from_start_address(PhysAddr::new(boot_ap_start() as u64))
+        .expect("AP boot code is not page aligned");
+    let end = PhysFrame::from_start_address(PhysAddr::new(boot_ap_end() as u64)
+        .align_up(PAGE_SIZE as u64)).unwrap();
+
+    PhysFrameRange { start, end }
+}
+
+fn start_ap_processors() {
+    // install reschedule IPI handler for multicore support
+    interrupt_dispatcher::install_reschedule_ipi_handler();
+
+    info!("Booting AP cores");
+    let boot_ap_start = boot_ap_start();
+
+    // send Init-IPI to all APs
+    ipi::send_init();
+
+    // wait at least 100ms
+    timer().wait(100);
+
+    // The vector is the startup address for the boot code
+    let vector: u8 = (boot_ap_start.addr() >> 12).try_into().unwrap();
+
+    info!("   Sending STARTUP IPI #1");
+    ipi::send_startup(vector as u8);
 }

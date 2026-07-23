@@ -2,12 +2,13 @@ use crate::interrupt::interrupt_handler::InterruptHandler;
 use crate::memory::MemorySpace;
 use crate::memory;
 use crate::memory::vma::VmaType;
-use crate::{apic, idt, interrupt_dispatcher, scheduler};
+use crate::process::core_local_storage::scheduler;
+use crate::{apic, idt, interrupt_dispatcher};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::ops::Deref;
 use core::ptr;
-use log::{error, info, trace};
+use log::{error, info, trace, warn};
 use spin::Mutex;
 use x86_64::registers::control::Cr2;
 use x86_64::{PrivilegeLevel, set_general_handler};
@@ -88,6 +89,7 @@ pub enum InterruptVector {
     // Possibly some other interrupts supported by IO APICs
 
     // Local APIC interrupts (247 - 254)
+    Reschedule = 0xf1, // dedicated reschedule IPI
     Cmci = 0xf8,
     ApicTimer = 0xf9,
     Thermal = 0xfa,
@@ -146,6 +148,7 @@ impl TryFrom<u8> for InterruptVector {
             value if value == InterruptVector::PrimaryAta as u8 => Ok(InterruptVector::PrimaryAta),
             value if value == InterruptVector::SecondaryAta as u8 => Ok(InterruptVector::SecondaryAta),
 
+            value if value == InterruptVector::Reschedule as u8 => Ok(InterruptVector::Reschedule),
             value if value == InterruptVector::Cmci as u8 => Ok(InterruptVector::Cmci),
             value if value == InterruptVector::ApicTimer as u8 => Ok(InterruptVector::ApicTimer),
             value if value == InterruptVector::Thermal as u8 => Ok(InterruptVector::Thermal),
@@ -176,6 +179,7 @@ pub fn setup_idt() {
     set_general_handler!(&mut idt, handle_exception, 0..31);
     set_general_handler!(&mut idt, handle_interrupt, 32..255);
     set_general_handler!(&mut idt, handle_page_fault, 14);
+    set_general_handler!(&mut idt, handle_fpu_interrupt, 7);
 
     #[cfg(feature = "gdbstub")]
     unsafe {
@@ -194,6 +198,22 @@ pub fn setup_idt() {
 
 fn handle_exception(mut frame: InterruptStackFrame, index: u8, error: Option<u64>) {
 
+// gets called once during interrupt initialization (after dispatcher exists)
+pub fn install_reschedule_ipi_handler() {
+    interrupt_dispatcher().assign(InterruptVector::Reschedule, Box::new(crate::interrupt::interrupt_handler::ReschedIpiHandler));
+}
+
+//Similar method for Application Cores
+#[unsafe(no_mangle)]
+pub extern "C" fn setup_ap_idt() {
+    let idt = idt().lock();
+    unsafe {
+        let idt_ref = ptr::from_ref(idt.deref()).as_ref().unwrap();
+        idt_ref.load();
+    }
+}
+
+fn handle_exception(frame: InterruptStackFrame, index: u8, error: Option<u64>) {
     panic!(
         "CPU Exception: [{} - {:?}]\nError code: [{:?}]\n{:?}",
         index,
@@ -207,7 +227,10 @@ fn handle_page_fault(frame: InterruptStackFrame, _index: u8, error: Option<u64>)
     let fault_addr = Cr2::read().expect("Invalid address in CR2 during page fault");
     let thread = scheduler().try_get_current_thread();
     if thread.is_none() {
-        panic!("Page Fault, cannot get lock to scheduler\nError code: [{:?}]\nAddress: [0x{:0>16x}]", error, fault_addr);
+        // if we don't have access to the scheduler, delay handling the page fault
+        // the application will access again, causing a new page fault
+        warn!("Page Fault at 0x{:0>16x} (code: {:?}), cannot get lock to scheduler", fault_addr, error);
+        return;
     }
 
     let thread = thread.unwrap();
@@ -265,6 +288,10 @@ fn handle_page_fault(frame: InterruptStackFrame, _index: u8, error: Option<u64>)
 
     // Page fault not resolved, panic
     panic!("Page Fault!\nError code: [{:?}]\nAddress: [0x{:0>16x}]\n{:?}", error, fault_addr, frame);
+}
+
+fn handle_fpu_interrupt(frame: InterruptStackFrame, _index: u8, _error: Option<u64>) {
+    scheduler().switch_fpu_context();
 }
 
 fn handle_interrupt(frame: InterruptStackFrame, index: u8, _error: Option<u64>) {

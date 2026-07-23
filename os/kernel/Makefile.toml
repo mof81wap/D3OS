@@ -22,6 +22,7 @@ LINKER_FILE = "${CARGO_MAKE_WORKING_DIRECTORY}/link.ld"
 RUST_OBJECT = "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}.a"
 ASM_OBJECT = "${BUILD_DIRECTORY}/boot.o"
 GDB_TRAP_OBJECT = "${BUILD_DIRECTORY}/gdb_interrupt_handler.o"
+ASM_OBJECT_AP = "${BUILD_DIRECTORY}/boot_ap.o"
 KERNEL = "${BOOTLOADER_DIRECTORY}/${CARGO_MAKE_PROJECT_NAME}.elf"
 
 [tasks.default]
@@ -31,7 +32,7 @@ alias = "link"
 
 [tasks.compile]
 command = "cargo"
-args = [ "build", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem", "--target", "${CARGO_CFG_TARGET_FAMILY}", "${CARGO_BUILD_OPTION}" ]
+args = [ "build", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem", "-Z", "json-target-spec", "--target", "${CARGO_CFG_TARGET_FAMILY}", "${CARGO_BUILD_OPTION}" ]
 condition = { files_modified = { input = [
     "${CARGO_MAKE_WORKING_DIRECTORY}/Cargo.toml", "${SOURCE_DIRECTORY}/**/*.rs",
     "${LIBRARY_DIRECTORY}/graphic/Cargo.toml", "${LIBRARY_DIRECTORY}/graphic/src/**/*.rs",
@@ -43,19 +44,24 @@ command = "nasm"
 args = [ "-f", "elf64", "-w+error=label-redef-late", "-o", "${ASM_OBJECT}", "${SOURCE_DIRECTORY}/boot.asm" ]
 condition = { files_modified = { input = [ "${SOURCE_DIRECTORY}/boot.asm" ], output = [ "${BUILD_DIRECTORY}/boot.o" ] } }
 
+[tasks.build-asm-ap]
+command = "nasm"
+args = [ "-f", "elf64", "-w+error=label-redef-late", "-o", "${ASM_OBJECT_AP}", "${SOURCE_DIRECTORY}/boot_ap.asm" ]
+condition = { files_modified = { input = [ "${SOURCE_DIRECTORY}/boot_ap.asm" ], output = [ "${BUILD_DIRECTORY}/boot_ap.o" ] } }
+
 [tasks.link]
 command = "${LINKER}"
-args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${KERNEL}", "${ASM_OBJECT}", "${RUST_OBJECT}", "-z", "noexecstack" ]
-dependencies = [ "compile", "build-asm" ]
+args = [ "-n", "-T", "${LINKER_FILE}", "-o", "${KERNEL}", "${ASM_OBJECT}", "${ASM_OBJECT_AP}", "${RUST_OBJECT}" ]
+dependencies = [ "compile", "build-asm" , "build-asm-ap" ]
 condition = { files_modified = { input = [ "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*", "${LINKER_FILE}" ], output = [ "${BOOTLOADER_DIRECTORY}/kernel.elf" ] } }
 
 [tasks.check]
 command = "cargo"
-args = [ "check", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem", "--target", "${CARGO_CFG_TARGET_FAMILY}", "${CARGO_BUILD_OPTION}" ]
+args = [ "check", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem", "-Z", "json-target-spec", "--target", "${CARGO_CFG_TARGET_FAMILY}", "${CARGO_BUILD_OPTION}" ]
 
 [tasks.clippy]
 command = "cargo"
-args = [ "clippy", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem", "--target", "${CARGO_CFG_TARGET_FAMILY}", "${CARGO_BUILD_OPTION}" ]
+args = [ "clippy", "-Z", "build-std=core,alloc", "-Z", "build-std-features=compiler-builtins-mem", "-Z", "json-target-spec", "--target", "${CARGO_CFG_TARGET_FAMILY}", "${CARGO_BUILD_OPTION}" ]
 
 [tasks.gdbstub]
 dependencies = [ "link-gdbstub" ]

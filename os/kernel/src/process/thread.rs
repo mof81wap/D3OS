@@ -34,21 +34,23 @@
    ║ Author: Fabian Ruhland & Michael Schoettner, 04.01.2026, HHU            ║
    ╚═════════════════════════════════════════════════════════════════════════╝
 */
-
+use alloc::alloc::alloc;
 use crate::consts::MAIN_USER_STACK_START;
 use crate::consts::MAX_USER_STACK_SIZE;
 use crate::consts::USER_SPACE_ENV_START;
 use crate::initrd;
 use crate::memory::PAGE_SIZE;
+use crate::process::core_local_storage::scheduler;
 use crate::memory::stack;
 use crate::memory::stack::StackAllocator;
 use crate::memory::vma::VmaType;
 use crate::process::process::Process;
 use crate::process::scheduler;
 use crate::syscall::syscall_dispatcher::CORE_LOCAL_STORAGE_TSS_RSP0_PTR_INDEX;
-use crate::{process_manager, scheduler, tss};
+use crate::{process_manager, tss};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::alloc::Layout;
 use core::arch::naked_asm;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering, AtomicU64};
@@ -65,6 +67,8 @@ use x86_64::structures::paging::Page;
 use core::ptr::NonNull;
 #[cfg(feature = "gdbstub")]
 use crate::gdbstub::gdbtarget::GdbTrapFrame;
+use crate::device::cpu;
+use crate::device::cpu::{XSaveComponents, XSaveState};
 
 /// kernel & user stack of a thread
 struct Stacks {
@@ -106,6 +110,7 @@ pub struct Thread {
     wake_pending: AtomicBool, // false => allowed to block; true => do NOT block (wake pending)
     #[cfg(feature = "gdbstub")]
     debug_trap_frame: AtomicU64,
+    xsave_state: XSaveState
 }
 
 impl Stacks {
@@ -146,6 +151,7 @@ impl Thread {
             wake_pending: AtomicBool::new(false),
             #[cfg(feature = "gdbstub")]
             debug_trap_frame: AtomicU64::new(0),
+            xsave_state: XSaveState::new()
         };
 
         thread.prepare_kernel_stack();
@@ -215,6 +221,7 @@ impl Thread {
             wake_pending: AtomicBool::new(false),
             #[cfg(feature = "gdbstub")]
             debug_trap_frame: AtomicU64::new(0),
+            xsave_state: XSaveState::new()
         };
 
         thread.prepare_kernel_stack();
@@ -301,6 +308,14 @@ impl Thread {
         self.id
     }
 
+    pub fn store_fpu_context(&self) {
+        cpu::xsave(&self.xsave_state, XSaveComponents::X87_FPU | XSaveComponents::SSE | XSaveComponents::AVX)
+    }
+
+    pub fn restore_fpu_context(&self) {
+        cpu::xrstor(&self.xsave_state, XSaveComponents::X87_FPU | XSaveComponents::SSE | XSaveComponents::AVX)
+    }
+
     /// Helper function, returns highest useable stack address of kernel stack  of 'self'
     fn kernel_stack_addr(&self) -> VirtAddr {
         let stacks = self.stacks.lock();
@@ -313,6 +328,8 @@ impl Thread {
         let mut stacks = self.stacks.lock();
 
         // init stack with 0s
+        info!("Stack capacity: {}", stacks.kernel_stack.capacity());
+        info!("Addr: {:x}", stacks.kernel_stack.as_ptr() as u64);
         for _ in 0..stacks.kernel_stack.capacity() {
             stacks.kernel_stack.push(0);
         }
@@ -581,6 +598,13 @@ impl Thread {
 unsafe extern "C" fn thread_kernel_start(old_rsp0: u64) {
     naked_asm!(
         "mov rsp, rdi", // First parameter -> load 'old_rsp0'
+
+        // Set Task Switched bit in CR0
+        "mov rax, cr0",
+        "or rax, 0x00000008",
+        "mov cr0, rax",
+
+        // Load registers from prepared stack
         "pop rax",
         "wrgsbase rax",
         "pop rax",
@@ -652,6 +676,11 @@ unsafe extern "C" fn thread_switch(current_rsp0: *mut u64, next_rsp0: u64, next_
 
     // Switch address space (fourth parameter 'next_cr3')
     "mov cr3, rcx",
+
+    // Set Task Switched bit in CR0
+    "mov rax, cr0",
+    "or rax, 0x00000008",
+    "mov cr0, rax",
 
     // Load registers of next thread by using 'next_rsp0' (second parameter)
     "mov rsp, rsi",
