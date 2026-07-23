@@ -3,6 +3,7 @@ use crate::gdbstub::gdbtarget::{GdbSwBreakpoint, ThreadContextMut, GdbHwBreakpoi
 use alloc::vec::Vec;
 use x86_64::structures::idt::InterruptStackFrame;
 use x86_64::VirtAddr;
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering, AtomicU64};
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum DebugEvent {
@@ -25,6 +26,7 @@ pub struct DebugState {
     pub gdb_stub_tid: Mutex<Option<usize>>,
     pub breakpoints: Mutex<Vec<GdbSwBreakpoint>>,
     pub hwbreakpoints: Mutex<[GdbHwBreakpoint; 4]>,
+    pub handler_active: AtomicBool,
 }
 
 #[cfg(feature = "gdbstub")]
@@ -33,4 +35,5 @@ pub static GDB_DEBUG_STATE: DebugState = DebugState {
     gdb_stub_tid: Mutex::new(None),
     breakpoints: Mutex::new(Vec::new()),
     hwbreakpoints: Mutex::new([GdbHwBreakpoint{address: 0}; 4]),
+    handler_active: AtomicBool::new(false),
 };

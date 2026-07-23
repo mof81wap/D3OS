@@ -196,7 +196,6 @@ pub fn setup_idt() {
     }
 }
 
-fn handle_exception(mut frame: InterruptStackFrame, index: u8, error: Option<u64>) {
 
 // gets called once during interrupt initialization (after dispatcher exists)
 pub fn install_reschedule_ipi_handler() {

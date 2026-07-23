@@ -6,7 +6,8 @@ use gdbstub::target::ext::base::multithread::{MultiThreadBase, MultiThreadResume
 use gdbstub::target::ext::base::multithread::{MultiThreadResumeOps, MultiThreadSingleStepOps, MultiThreadSchedulerLockingOps};
 use gdbstub::common::{Tid};
 use gdbstub::arch::Arch;
-use crate::{scheduler, process_manager};
+use crate::{process_manager};
+use crate::process::core_local_storage::scheduler;
 use x86_64::VirtAddr;
 use gdbstub::target::ext::breakpoints::{Breakpoints, SwBreakpoint, HwBreakpoint};
 use gdbstub::target::ext::breakpoints::{BreakpointsOps, SwBreakpointOps, HwBreakpointOps};
@@ -23,10 +24,11 @@ use gdbstub::stub::MultiThreadStopReason;
 use crate::device::cpu::{disable_int_nested, enable_int_nested};
 use crate::process::thread::ThreadState;
 use gdbstub::common::Signal;
-use x86_64::registers::control::{Cr0, Cr3};
+use x86_64::registers::control::{Cr0, Cr3, Cr3Flags};
 use x86_64::structures::paging::page::{PageRange, Size4KiB, Page};
 use x86_64::structures::paging::PageTableFlags;
 use x86_64::registers::debug::{Dr0, Dr1, Dr2, Dr3, Dr6, Dr7, DebugAddressRegister, Dr7Flags, Dr7Value, Dr6Flags};
+use core::sync::atomic::Ordering;
 
 
 pub struct GdbStubTarget {
@@ -213,9 +215,14 @@ impl MultiThreadBase for GdbStubTarget {
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
 
+        let process = thread.process();
+        let (old_frame, old_flags) = Cr3::read();
+        process.virtual_address_space.load_address_space();
+
         if let Some(ptr) = thread.debug_trap_frame() {
             let frame = unsafe { ptr.as_ref() };
             *regs = regs_from_trap_frame(frame);
+            unsafe { Cr3::write(old_frame, old_flags) };
 
             return Ok(());
         }
@@ -223,6 +230,7 @@ impl MultiThreadBase for GdbStubTarget {
         let rsp0 = thread.saved_rsp0();
         let ctx = thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
         *regs = X86_64CoreRegs::from(ctx);
+        unsafe { Cr3::write(old_frame, old_flags) };
 
         Ok(())
     }
@@ -235,6 +243,10 @@ impl MultiThreadBase for GdbStubTarget {
         let thread = scheduler()
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
+
+        let process = thread.process();
+        let (old_frame, old_flags) = Cr3::read();
+        process.virtual_address_space.load_address_space();
 
         if let Some(ptr) = thread.debug_trap_frame() {
             let frame = unsafe { &mut *ptr.as_ptr() };
@@ -259,6 +271,7 @@ impl MultiThreadBase for GdbStubTarget {
             frame.rip = regs.rip;
             frame.rflags = regs.eflags as u64;
 
+            unsafe { Cr3::write(old_frame, old_flags) };
             return Ok(());
         } 
         
@@ -283,6 +296,7 @@ impl MultiThreadBase for GdbStubTarget {
         ctx.registers[ThreadRegs::Rip as usize] = regs.rip;
         ctx.registers[ThreadRegs::Rflags as usize] = regs.eflags as u64;
 
+        unsafe { Cr3::write(old_frame, old_flags) };
         Ok(())
     }
     fn read_addrs(
@@ -328,6 +342,7 @@ impl MultiThreadBase for GdbStubTarget {
         &mut self,
         thread_is_active: &mut dyn FnMut(Tid)
     ) -> Result<(), Self::Error> {
+        info!("ENTER LIST THREADS");
         let active_ids = scheduler().gdb_thread_ids();
 
         for id in active_ids {
@@ -335,6 +350,7 @@ impl MultiThreadBase for GdbStubTarget {
                 thread_is_active(Tid::new(id).unwrap());
             }
         }
+        info!("EXIT LIST THREADS");
         Ok(())
     }
 
@@ -401,7 +417,6 @@ impl SwBreakpoint for GdbStubTarget {
 
         let instruction = bp.instruction;
         unsafe { virt_addr_ptr.write_volatile(instruction) };
-
         Ok(true)
     }
 }
@@ -409,10 +424,12 @@ impl SwBreakpoint for GdbStubTarget {
 impl MultiThreadResume for GdbStubTarget {
 
     fn resume(&mut self) -> Result<(), Self::Error> {
+        info!("ENTER RESUME");
         let actions = self.resume_actions.lock()
                                         .clone();
 
         if actions.is_empty() {
+            info!("ACTIONS EMTPY");
             scheduler().debug_resume_all();
             enable_int_nested(true);
             return Ok(());
@@ -421,9 +438,12 @@ impl MultiThreadResume for GdbStubTarget {
         for (tid, action) in actions.iter() {
             match action {
                 ResumeAction::Continue => {
+                    info!("ACTION CONT");
                     scheduler().debug_resume_thread(*tid);
+                    info!("EXIT ACTION CONT");
                 }
                 ResumeAction::SingleStep => {
+                    info!("ACTION STEP");
                     let thread = scheduler()
                             .thread(*tid)
                             .ok_or(())?;
@@ -438,12 +458,14 @@ impl MultiThreadResume for GdbStubTarget {
                     }
 
                     scheduler().debug_resume_thread(*tid);
+                    info!("EXIT ACTION STEP");
                 }
             }
         }
 
-        scheduler().debug_resume_all();
+        //scheduler().debug_resume_all();
         enable_int_nested(true);
+        info!("EXIT RESUME");
         Ok(())
     }
 
@@ -658,9 +680,7 @@ fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
         GDB_DEBUG_STATE.gdb_stub_tid.lock().unwrap()
     };
 
-    {
-        scheduler().debug_stop_all_except(gdb_stub_tid);
-    }
+    scheduler().debug_stop_all_except(gdb_stub_tid);
 
     scheduler().debug_resume_thread(gdb_stub_tid);
     scheduler().switch_thread_from_interrupt();

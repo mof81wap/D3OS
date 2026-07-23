@@ -71,6 +71,7 @@ env = { RUSTFLAGS = "--cfg getrandom_backend=\"rdrand\" -C force-frame-pointers=
 command = "cargo"
 args = [
     "build",
+    "-Z", "json-target-spec",
     "-Z", "build-std=core,alloc",
     "-Z", "build-std-features=compiler-builtins-mem",
     "--target", "${CARGO_CFG_TARGET_FAMILY}",
@@ -95,14 +96,22 @@ args = [
     "-T", "${LINKER_FILE}",
     "-o", "${KERNEL}",
     "${ASM_OBJECT}",
+    "${ASM_OBJECT_AP}",
     "${GDB_TRAP_OBJECT}",
     "${RUST_OBJECT}",
     "-z", "noexecstack"
 ]
-dependencies = [ "compile-gdbstub", "build-asm", "build-gdb-trap-asm" ]
+dependencies = [
+    "compile-gdbstub",
+    "build-asm",
+    "build-asm-ap",
+    "build-gdb-trap-asm"
+]
 condition = { files_modified = { input = [
     "${BUILD_DIRECTORY}/lib${CARGO_MAKE_PROJECT_NAME}*",
     "${LINKER_FILE}",
+    "${ASM_OBJECT}",
+    "${ASM_OBJECT_AP}",
     "${GDB_TRAP_OBJECT}"
 ], output = [ "${BOOTLOADER_DIRECTORY}/kernel.elf" ] } }
 

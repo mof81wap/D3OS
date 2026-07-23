@@ -145,7 +145,7 @@ pub fn cls_ptr() -> *mut CoreLocalStorage {
 /// wraps the code of another method with "swapgs" calls to get access to the
 /// kernelGS-Base instead of the GS-Base during execution
 /// also saves the current IF and restores it afterwards
-#[inline(always)]
+//#[inline(always)]
 pub fn with_kernel_gs<R>(f: impl FnOnce() -> R) -> R {
     unsafe {
         //save current rflags to restore interrupt flag afterwards
@@ -373,7 +373,7 @@ pub fn init_gdt_for_this_core() {
 /// Scheduler.
 /// Manages the execution of threads and switches between them.
 /// Allows to access active threads, put threads to sleep, exit/kill threads and creates new ones.
-#[inline(always)]
+//#[inline(always)]
 pub fn scheduler() -> &'static Scheduler {
     // SAFETY: cls_ptr() points to a per-core CLS that is Box::leak'ed,
     // so its fields are stable for the kernel lifetime.

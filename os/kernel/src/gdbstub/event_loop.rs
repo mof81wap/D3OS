@@ -12,7 +12,7 @@ use gdbstub::common::Tid;
 use log::info;
 use gdbstub::target::ext::breakpoints::SwBreakpoint;
 use crate::device::cpu::{disable_int_nested};
-use crate::{scheduler};
+use crate::process::core_local_storage::scheduler;
 use crate::process::thread::Thread;
 
 enum GdbBlockingEventLoop{}
@@ -84,6 +84,7 @@ impl BlockingEventLoop for GdbBlockingEventLoop {
                     }
                     DebugEvent::SingleStep { tid } => {
                         return Ok(Event::TargetStopped(MultiThreadStopReason::SignalWithThread{tid: Tid::new(tid).unwrap(), signal: Signal::SIGTRAP,}))
+                        //return Ok(Event::TargetStopped(MultiThreadStopReason::DoneStep))
                     }
                     DebugEvent::HwBreakpoint{ tid } => {
                         let tid = Tid::new(tid).unwrap();

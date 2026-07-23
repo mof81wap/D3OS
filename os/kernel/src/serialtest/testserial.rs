@@ -6,7 +6,7 @@ use stream::DecodedInputStream;
 use crate::alloc::string::ToString;
 use crate::process::thread::Thread;
 use crate::process::scheduler::Scheduler;
-use crate::scheduler;
+use crate::process::core_local_storage::scheduler;
 use alloc::sync::Arc;
 use crate::gdbstub::gdbtarget::{thread_context_from_rsp, ThreadRegs, GdbStubTarget};
 use log::info;
@@ -164,10 +164,11 @@ pub extern "C" fn gdb_break_here() {
     let x = 1;
     let y = 2;
     hex(32);
-    info!("GDB BREAK HERE DR7={:?}", Dr7::read());
+    //info!("GDB BREAK HERE DR7={:?}", Dr7::read());
     scheduler();
     let z = x + y;
-    info!("GDB BREAK HERE");
+    let dr7 = Dr7::read();
+    //info!("GDB BREAK HERE");
 
     for i in 0..1000000 {
         let mut x = 0;

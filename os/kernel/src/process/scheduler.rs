@@ -242,10 +242,47 @@ impl Scheduler {
 
     /// Return reference to thread identified by `thread_id`
     pub fn thread(&self, thread_id: usize) -> Option<Arc<Thread>> {
-        self.ready_state.lock().ready_queue
-            .iter()
-            .find(|thread| thread.id() == thread_id)
-            .cloned()
+        {
+            let state = self.ready_state.lock();
+
+            if let Some(current) = state.current_thread.as_ref() {
+                if current.id() == thread_id {
+                    return Some(Arc::clone(current));
+                }
+            }
+
+            if let Some(thread) = state
+                .ready_queue
+                .iter()
+                .find(|thread| thread.id() == thread_id)
+            {
+                return Some(Arc::clone(thread));
+            }
+        }
+
+        {
+            let blocked = self.blocked_list.lock();
+
+            if let Some(thread) = blocked
+                .iter()
+                .find(|thread| thread.id() == thread_id)
+            {
+                return Some(Arc::clone(thread));
+            }
+        }
+
+        {
+            let sleep = self.sleep_list.lock();
+
+            if let Some((thread, _)) = sleep
+                .iter()
+                .find(|(thread, _)| thread.id() == thread_id)
+            {
+                return Some(Arc::clone(thread));
+            }
+        }
+
+        None
     }
 
     /// Return (pid, tid) of current thread
@@ -738,12 +775,12 @@ impl Scheduler {
             state.current_thread = Some(next);
 
             // last!=idle => we need to enqueue it back in the readyQueue
-            if current_was_idle == false {
-                state.ready_queue.push_front(current);
-            }
-            else if current.state() == ThreadState::DebugStopped {
+            if current.state() == ThreadState::DebugStopped {
                 let mut block_list = self.blocked_list.lock();
                 block_list.push(current);
+            }
+            else if current_was_idle == false {
+                state.ready_queue.push_front(current);
             }
             else if current.state() == ThreadState::Exited {
             }
