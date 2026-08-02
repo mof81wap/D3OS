@@ -17,6 +17,8 @@ use core::ptr::addr_of_mut;
 use gdbstub::target::ext::breakpoints::{Breakpoints, SwBreakpoint};
 use x86_64::registers::rflags::RFlags;
 use x86_64::registers::debug::{Dr0, Dr1, Dr2, Dr3, Dr7, DebugAddressRegister, Dr7Flags, Dr7Value};
+use alloc::vec::Vec;
+use alloc::string::String;
 
 
 
@@ -169,6 +171,12 @@ pub extern "C" fn gdb_break_here() {
     let z = x + y;
     let dr7 = Dr7::read();
     //info!("GDB BREAK HERE");
+    let mut list = Vec::new();
+    list.push(1);
+    list.push(42);
+    list.push(123432);
+    list.push(-1);
+    let test_struct = GdbTestStruct::new();
 
     for i in 0..1000000 {
         let mut x = 0;
@@ -299,4 +307,20 @@ pub fn test_sw_breakpoint() {
 
     let ok = <GdbStubTarget as SwBreakpoint>::remove_sw_breakpoint(&mut target, addr, 1);
     info!("returned from breakpoint target");
+}
+
+struct GdbTestStruct {
+    pub int_field: usize,
+    pub string_field: String,
+    pub array_field: [usize; 5],
+}
+
+impl GdbTestStruct {
+    pub fn new() -> Self {
+        Self {
+            int_field: 42,
+            string_field: "Hello World".to_string(),
+            array_field: [1, 42, 8775, 2432, 2],
+        }
+    }
 }

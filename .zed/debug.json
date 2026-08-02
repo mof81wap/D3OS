@@ -11,5 +11,13 @@
     // so you need to run `cargo make --no-workspace debug` in a terminal
     "request": "attach",
     "target": "localhost:1234"
+  },
+  {
+    "label": "gdbstub",
+    "adapter": "GDB",
+    "program": "$ZED_WORKTREE_ROOT/loader/kernel.elf",
+    "sourceLanguages": ["rust"],
+    "request": "target remote",
+    "target": "localhost:1234"
   }
 ]

@@ -1,7 +1,6 @@
 {
     "version": "0.2.0",
     "configurations": [
-        
         {
             "name": "qemu-gdb",
             "type": "cppdbg",
@@ -17,6 +16,20 @@
                 {"text": "add-symbol-file ${workspaceRoot}/loader/initrd/bin/hello"}
             ],
             "preLaunchTask": "qemu-gdb"
+        },
+        {
+            "name": "gdbstub",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/loader/kernel.elf",
+            "cwd": "${workspaceFolder}",
+            "miDebuggerPath": "rust-gdb",
+            "stopAtEntry": true,
+            "setupCommands": [
+                {"text": "-enable-pretty-printing"},
+                {"text": "set disassembly-flavor intel"},
+                {"text": "target remote localhost:4321"}
+            ],
         }
     ]
 }

@@ -29,6 +29,9 @@ use x86_64::structures::paging::page::{PageRange, Size4KiB, Page};
 use x86_64::structures::paging::PageTableFlags;
 use x86_64::registers::debug::{Dr0, Dr1, Dr2, Dr3, Dr6, Dr7, DebugAddressRegister, Dr7Flags, Dr7Value, Dr6Flags};
 use core::sync::atomic::Ordering;
+use crate::process::scheduler;
+use crate::process::core_local_storage;
+use crate::process::core_local_storage::{PreemptGuard};
 
 
 pub struct GdbStubTarget {
@@ -210,19 +213,23 @@ impl MultiThreadBase for GdbStubTarget {
         regs: &mut X86_64CoreRegs,
         tid: Tid
     ) -> TargetResult<(), Self> {
+        let guard = PreemptGuard::new();
+
         let raw_tid = tid.get();
         let thread = scheduler()
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
 
+        drop(guard);
+
         let process = thread.process();
-        let (old_frame, old_flags) = Cr3::read();
-        process.virtual_address_space.load_address_space();
+        //let (old_frame, old_flags) = Cr3::read();
+        //process.virtual_address_space.load_address_space();
 
         if let Some(ptr) = thread.debug_trap_frame() {
             let frame = unsafe { ptr.as_ref() };
             *regs = regs_from_trap_frame(frame);
-            unsafe { Cr3::write(old_frame, old_flags) };
+            //unsafe { Cr3::write(old_frame, old_flags) };
 
             return Ok(());
         }
@@ -230,7 +237,7 @@ impl MultiThreadBase for GdbStubTarget {
         let rsp0 = thread.saved_rsp0();
         let ctx = thread_context_from_rsp(rsp0).ok_or(TargetError::NonFatal)?;
         *regs = X86_64CoreRegs::from(ctx);
-        unsafe { Cr3::write(old_frame, old_flags) };
+        //unsafe { Cr3::write(old_frame, old_flags) };
 
         Ok(())
     }
@@ -240,9 +247,13 @@ impl MultiThreadBase for GdbStubTarget {
         regs: &X86_64CoreRegs,
         tid: Tid,
     ) -> TargetResult<(), Self> {
+        let guard = PreemptGuard::new();
+
         let thread = scheduler()
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
+
+        drop(guard);
 
         let process = thread.process();
         let (old_frame, old_flags) = Cr3::read();
@@ -305,9 +316,16 @@ impl MultiThreadBase for GdbStubTarget {
         data: &mut [u8],
         tid: Tid
     ) -> TargetResult<usize, Self> {
+        if start_addr == 0 {
+            return Err(TargetError::NonFatal);
+        }
+        let guard = PreemptGuard::new();
+
         let thread = scheduler()
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
+
+        drop(guard);
 
         for (offset, byte) in data.iter_mut().enumerate() {
             let virt_addr = start_addr + offset as u64;
@@ -323,16 +341,22 @@ impl MultiThreadBase for GdbStubTarget {
         data: &[u8],
         tid: Tid
     ) -> TargetResult<(), Self> {
+        if start_addr == 0 {
+            return Err(TargetError::NonFatal);
+        }
+        let guard = PreemptGuard::new();
+
         let thread = scheduler()
                     .thread(tid.get())
                     .ok_or(TargetError::NonFatal)?;
+
+        drop(guard);
 
         for (offset, byte) in data.iter().enumerate() {
             let virt_addr = start_addr + offset as u64;
 
             unsafe { *(virt_addr as *mut u8) = *byte; }
         }
-
 
         Ok(())
     }
@@ -342,8 +366,9 @@ impl MultiThreadBase for GdbStubTarget {
         &mut self,
         thread_is_active: &mut dyn FnMut(Tid)
     ) -> Result<(), Self::Error> {
-        let active_ids = scheduler().gdb_thread_ids();
-        for id in active_ids {
+        //let active_ids = scheduler().gdb_thread_ids();
+        let active_ids = scheduler::active_tids().lock().clone().into_iter();
+        for (id, _) in active_ids {
             if id != 0 {
                 thread_is_active(Tid::new(id).unwrap());
             }
@@ -421,13 +446,15 @@ impl SwBreakpoint for GdbStubTarget {
 impl MultiThreadResume for GdbStubTarget {
 
     fn resume(&mut self) -> Result<(), Self::Error> {
-        info!("ENTER RESUME");
-        let actions = self.resume_actions.lock()
-                                        .clone();
+        let guard = PreemptGuard::new();
+        let actions = {
+            self.resume_actions.lock().clone()
+        };
 
         if actions.is_empty() {
             scheduler().debug_resume_all();
             enable_int_nested(true);
+            drop(guard);
             return Ok(());
         }
 
@@ -439,7 +466,7 @@ impl MultiThreadResume for GdbStubTarget {
                 ResumeAction::SingleStep => {
                     let thread = scheduler()
                             .thread(*tid)
-                            .ok_or(())?;
+                            .expect("SINGLESTEP: FAILED TO GET THREAD");
 
                     if let Some(ptr) = thread.debug_trap_frame() {
                         let frame = unsafe { &mut *ptr.as_ptr() };
@@ -449,16 +476,15 @@ impl MultiThreadResume for GdbStubTarget {
                         let mut ctx = mut_thread_context_from_rsp(rsp).ok_or(())?;
                         ctx.registers[ThreadRegs::Rflags as usize] |= RFLAGS_TF;
                     }
-
                     scheduler().debug_resume_thread(*tid);
                 }
             }
         }
 
-        if GDB_DEBUG_STATE.scheduler_locking.load(Ordering::Acquire) {
+        if !GDB_DEBUG_STATE.scheduler_locking.load(Ordering::Acquire) {
             scheduler().debug_resume_all();
         }
-        info!("EXIT RESUME");
+        drop(guard);
         enable_int_nested(true);
         Ok(())
     }
@@ -647,7 +673,7 @@ fn gdb_handle_int3(frame: &mut GdbTrapFrame) {
 
     scheduler().debug_stop_all_except(gdb_stub_tid);
     scheduler().debug_resume_thread(gdb_stub_tid);
-    scheduler().switch_thread_from_interrupt();
+    scheduler().switch_thread_no_interrupt();
 }
 
 fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
@@ -683,7 +709,7 @@ fn gdb_handle_debug_exception(frame: &mut GdbTrapFrame) {
     scheduler().debug_stop_all_except(gdb_stub_tid);
 
     scheduler().debug_resume_thread(gdb_stub_tid);
-    scheduler().switch_thread_from_interrupt();
+    scheduler().switch_thread_no_interrupt();
 }
 
 pub fn thread_context_from_rsp(rsp: VirtAddr) -> Option<ThreadContext> {

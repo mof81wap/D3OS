@@ -229,14 +229,21 @@ impl Scheduler {
     }
 
     /// Try to return reference to current thread (called from interrupt dispatcher)
-    pub fn try_get_current_thread(&self) -> Option<Arc<Thread>> {
+    /*pub fn try_get_current_thread(&self) -> Option<Arc<Thread>> {
         if self.ready_state.is_locked() {
+            info!("READY STATE LOCKED");
             return None;
         }
         if allocator().is_locked() {
+            info!("ALLOCATOR LOCKED");
             return None;
         }
         let state = self.get_ready_state();
+        Some(Scheduler::current(&state))
+    }*/
+
+    pub fn try_get_current_thread(&self) -> Option<Arc<Thread>> {
+        let state = self.ready_state.try_lock()?; 
         Some(Scheduler::current(&state))
     }
 
@@ -1153,7 +1160,9 @@ impl Scheduler {
 
         drop(state);
 
-        self.blocked_list.lock().push(thread);
+        {
+            self.blocked_list.lock().push(thread);
+        }
         true
     }
 
@@ -1190,7 +1199,9 @@ impl Scheduler {
 
         drop(state);
 
-        self.blocked_list.lock().extend(debug_stopped);
+        {
+            self.blocked_list.lock().extend(debug_stopped);
+        }
     }
 
     pub fn debug_resume_thread(&self, tid: usize) -> bool {

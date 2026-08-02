@@ -60,6 +60,15 @@
                     }
                   }
             ]
-        }
+        },
+        {
+            "label": "gdbstub",
+            "type": "shell",
+            "isBackground": true,
+            "command": "cargo",
+            "args": [ "make", "--no-workspace", "--profile", "development", "debug" ],
+            "problemMatcher": [],
+            "dependsOn": "build"
+        },
     ]
 }
