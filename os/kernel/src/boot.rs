@@ -77,9 +77,9 @@ const BOOT_TO_GUI: bool = false; // Immediately start the GUI instead of termina
 #[unsafe(no_mangle)]
 pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInformationHeader) {
     // Initialize logger
-    log::set_logger(logger())
+    /*log::set_logger(logger())
         .map(|()| log::set_max_level(LevelFilter::Info))
-        .expect("Failed to initialize logger!");
+        .expect("Failed to initialize logger!");*/
 
     // Log messages and panics are now working, but cannot use format string until the heap is initialized later on
     info!("Welcome to D3OS early boot environment!");
@@ -202,7 +202,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
     // Initialize serial port and enable serial logging
     init_serial_port();
     if let Some(serial) = serial_port() {
-        logger().register(serial);
+        //logger().register(serial);
     }
 
     // Map the framebuffer, needed for text output of the terminal
@@ -326,7 +326,7 @@ pub extern "C" fn start(multiboot2_magic: u32, multiboot2_addr: *const BootInfor
 
     // Enable serial port interrupts
     if let Some(serial) = serial_port() {
-        SerialPort::plugin(serial);
+        //SerialPort::plugin(serial);
     }
 
     // Scan PCI bus

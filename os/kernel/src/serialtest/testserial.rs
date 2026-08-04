@@ -99,13 +99,13 @@ pub extern "sysv64" fn debug_thread_context_wrapper() {
 }
 
 pub extern "sysv64" fn debug_thread_context() -> ! {
-    let tid = scheduler().current_thread().id();
+    //let tid = scheduler().current_thread().id();
     //info!("THREAD ID={}", tid);
     //info!("ENTERING DEBUG THREAD CONTEXT");
-    let thread = Thread::new_kernel_thread(test_read, "a");
+    //let thread = Thread::new_kernel_thread(test_read, "a");
     //scheduler().ready(thread.clone());
     
-    let rsp = thread.saved_rsp0();
+    //let rsp = thread.saved_rsp0();
 
     /*let ctx = match thread_context_from_rsp(rsp) {
         Some(ctx) => ctx,

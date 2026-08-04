@@ -130,7 +130,7 @@ fn write_message_to_all_streams(string: &str, streams: &spin::MutexGuard<'_, Vec
 impl Logger {
     pub fn new() -> Self {
         let mut serial = None;
-        if serial::check_port(ComPort::Com1) {
+        /*if serial::check_port(ComPort::Com1) {
             serial = Some(SerialPort::new_write_only(ComPort::Com1))
         } else if serial::check_port(ComPort::Com2) {
             serial = Some(SerialPort::new_write_only(ComPort::Com2))
@@ -138,7 +138,7 @@ impl Logger {
             serial = Some(SerialPort::new_write_only(ComPort::Com3))
         } else if serial::check_port(ComPort::Com4) {
             serial = Some(SerialPort::new_write_only(ComPort::Com4))
-        }
+        }*/
 
         Self {
             level: if built_info::PROFILE == "debug" { Level::Debug } else { Level::Info },

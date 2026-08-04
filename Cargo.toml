@@ -34,5 +34,3 @@ members = [
 # [profile.release]
 # debug = true
 
-[patch.crates-io]
-gdbstub = { path = "os/kernel/gdbstub_patch/gdbstub" }

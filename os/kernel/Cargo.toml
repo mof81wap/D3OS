@@ -58,7 +58,7 @@ bitfield-struct = "0.1"
 num_enum = { version = "0.7.3", default-features = false }
 llfree = { git = "https://github.com/luhsra/llfree-rs", default-features = false }
 uuid = { version = "1.23.1", default-features = false, features = ["v7"] }
-gdbstub = { version = "0.7.10", default-features = false, optional = true }
+gdbstub = { version = "0.7.10", default-features = false, optional = true, features = ["alloc"] }
 gdbstub_arch = {version = "0.3.3", optional = true }
 volatile = "0.4.6"
 
